@@ -1,6 +1,6 @@
 # GLearning
 
-GLearning is a game-dialogue English learning site. It turns familiar quest dialogue into a bilingual reader with game-specific themes, source-aware pairing, source-clip audio playback, glossary review, and TSV export.
+GLearning is a game-dialogue English learning site. It turns familiar quest dialogue into a bilingual reader with game-specific themes, source-aware pairing, source-clip audio playback, glossary review, deterministic language help, and TSV export.
 
 Live site: <https://glearning.pages.dev>
 
@@ -76,7 +76,7 @@ Explicit Chinese URLs still work for manual source pairing:
 - Browser-local due review queue persists in `localStorage` key `glearning-review-v1`: saved lines/terms with no review state are due now, `Again` schedules about 10 minutes out, and `Know` grows a simple local interval.
 - Audio playback with local MP3 preference for bundled Wuthering Waves voice files; sample games intentionally have no playable source clips unless a connector is added, and audio-only controls are disabled or labeled unavailable when the current quest/sample has no playable clips.
 - Study panel with glossary terms, saved term toggles, and a lightweight saved line/term review card.
-- Contextual language help MVP: a dialogue-line button opens local deterministic glossary matches and basic grammar/reading hints in the Study panel.
+- Richer deterministic language help MVP: a dialogue-line button opens local source-term matches with `english` / `chinese` / `both` match labels, up to 8 local key words/chunks, up to 4 transparent grammar pattern cards, and one reading strategy in the Study panel.
 - Source panel for manual Fandom/BWIKI/Kuro source swapping.
 - TSV export is the current launch export/share MVP for Anki or spreadsheet review.
 - Share cards, profiles, accounts, cloud sync, and public progress pages are explicitly deferred beyond launch.
@@ -248,7 +248,7 @@ For the 2026-05-04 Plus closeout deploy, preview `https://6ef1b11f.glearning.pag
 - Wuwa route shows live status; sample-game routes show honest sample/connector-planned status.
 - Sample/status honesty copy is visible where expected.
 - Audio controls behave honestly (available when clips exist; disabled/unavailable when clips do not).
-- Study/save/review/language-help flows still work.
+- Study/save/review/language-help flows still work; language help remains fully local and deterministic with no dictionary API, AI parser, external lookup, or persistence side effects.
 - `/saved` opens from the Home ★ control, shows local totals/due counts, can filter saved lines/terms across games, can Show answer → Again/Know on the first due review, and can remove a saved item plus its review state.
 - Export panel shows defer copy: TSV-only MVP; share cards/profiles/accounts/cloud sync/public pages deferred; saved/review data local to browser.
 - No visible profile/account/share controls that silently no-op.
@@ -269,7 +269,7 @@ After UI or API changes, verify at least these production behaviors:
 - Saved dialogue lines and glossary terms persist locally: save a line and a glossary term, change routes or reload, and confirm `localStorage.glearning-saves-v1` keeps those items separated by `gameId` and `questKey`. The ReaderDock saved count reflects the active game, while the Study panel list reflects the active quest.
 - Global saved library works locally: open `/saved`, confirm saved items across games render with game/type/quest/source metadata when available and fallback quest labels for old saved items, search/filter by game/type/due, and use Open game without expecting exact quest/line restoration.
 - Local saved-item review queue works without an account: after saving a line or glossary term, confirm it appears as due in the ReaderDock, Study panel, and `/saved` because it has no `glearning-review-v1` state; use `Show answer` → `Again` and confirm the item is scheduled about 10 minutes out; reload and confirm `glearning-review-v1` persists; un-save or remove the item and confirm its review-state entry is removed.
-- Contextual language help is local and deterministic: click `Language help` on a dialogue card, confirm the Study panel opens with the selected speaker/context, EN/ZH snippets, glossary matches when quest terms appear in the line, up to three grammar/reading hints, and `Clear language help`; confirm it does not change played/revealed/mastered/saved local state.
+- Contextual language help is local and deterministic: click `Language help` on a dialogue card, confirm the Study panel opens with the selected speaker/context, EN/ZH snippets, source glossary matches labeled by match source (`english`, `chinese`, or `both`), up to 8 key words/chunks from quest terms plus the built-in local list, up to 4 grammar pattern cards, one reading strategy, and `Clear language help`; confirm it does not change played/revealed/mastered/saved/review local state and does not call fetch, AI, an external dictionary, or persistence APIs.
 - Audio MVP honesty: on a Wuthering Waves quest with bundled/source clips, `Audio only` remains available and filters to playable dialogue lines; on sample games or any quest with `audioCount=0`, topbar/Study/ReaderDock audio-only controls are disabled or labeled unavailable, and the reader does not become blank from a stale audio-only setting. Empty reader states should explain no audio clips, no audio lines matching filters, no dialogue matching filters, or no loaded dialogue as applicable.
 - Landing/reader honesty: Wuthering Waves is the only live source connector at launch; other games are sample-reader pages with real study-loop UX but no live source connector or playable source clips yet.
 - Voice practice is explicitly deferred for launch: there is no recording, pronunciation scoring, TTS, generated audio, or account-backed voice feature in the current MVP.
@@ -286,6 +286,6 @@ GLearning fetches source pages on demand for personal study. Fandom, Kuro Wiki, 
 - Add cross-device sync only after accounts/cloud storage exist; current saved/review data remains browser-local.
 - Keep launch export/share scope to TSV; defer share cards, profiles, accounts, cloud sync, and public progress pages.
 - Add voice recording and pronunciation scoring only after playback coverage, privacy, rights, and evaluation constraints are clear; current launch scope remains source-clip listening playback and only Wuthering Waves has connector-backed source authenticity/audio coverage.
-- Expand contextual language help beyond the local deterministic MVP with richer dictionary lookup and optional AI grammar parsing once source, cost, and accuracy constraints are clear.
+- Expand contextual language help beyond the richer deterministic MVP with a full dictionary, AI grammar parser, or external lookup only after source, cost, privacy, and accuracy constraints are clear.
 - Improve mobile reader ergonomics.
 - Add screenshots or short demo clips to the repository docs.

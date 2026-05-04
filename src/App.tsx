@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { GAMES } from './gameData'
+import { buildLanguageHelp, type LanguageHelp } from './languageHelp'
 import type { MainQuestCatalogResponse, MainQuestOption, PairConfidence, QuestLine, QuestResponse } from './types'
 
 const DEFAULT_EN_URL = 'https://wutheringwaves.fandom.com/wiki/Utterance_of_Marvels:_I'
@@ -115,12 +116,6 @@ type StoredReviewItems = {
 }
 
 type GlossaryTerm = QuestResponse['terms'][number]
-
-type LanguageHelp = {
-  line: QuestLine
-  terms: GlossaryTerm[]
-  hints: string[]
-}
 
 type QuestStudyIdentity = {
   questKey: string
@@ -1712,17 +1707,17 @@ function LanguageHelpPanel({ help, onClear }: { help: LanguageHelp | null; onCle
     return (
       <section className="panel language-help-panel">
         <h4>Language help · 句子提示 <span className="pill">local</span></h4>
-        <p className="saved-empty">Pick <b>Language help</b> on any dialogue line to see local glossary matches and basic reading hints here.</p>
-        <p className="help-disclaimer">Local hints only — not a full dictionary or AI grammar parser.</p>
+        <p className="saved-empty">Pick <b>Language help</b> on any dialogue line to see deterministic source terms, key chunks, grammar pattern cards, and one reading strategy here.</p>
+        <p className="help-disclaimer">Fully local rules only — no fetch, AI grammar parser, external dictionary lookup, or saved/review state changes.</p>
       </section>
     )
   }
 
-  const { line, terms, hints } = help
+  const { line, terms, keyChunks, patterns, readingStrategy } = help
 
   return (
     <section className="panel language-help-panel has-help" aria-live="polite">
-      <h4>Language help · 句子提示 <span className="pill">local</span></h4>
+      <h4>Language help · 句子提示 <span className="pill">local rules</span></h4>
       <div className="help-context">
         <span>{line.speakerEn || line.speakerZh || 'Narration'}</span>
         <small>{line.speakerZh ? `${line.speakerZh} · ` : ''}{line.type === 'choice' ? 'player choice' : 'dialogue line'} · {confidenceText(line.confidence)}</small>
@@ -1732,13 +1727,14 @@ function LanguageHelpPanel({ help, onClear }: { help: LanguageHelp | null; onCle
         {line.zh && <p><span>ZH</span>{line.zh}</p>}
       </div>
       <div className="help-block">
-        <h5>Matched terms</h5>
+        <h5>Source terms</h5>
         {terms.length ? (
           <div className="help-term-list">
             {terms.map((term) => (
               <span className="help-term" key={`${term.en}:${term.zh}`}>
                 <b>{term.en}</b>
                 <small>{term.zh}</small>
+                <em>{term.matchedBy}</em>
               </span>
             ))}
           </div>
@@ -1747,14 +1743,48 @@ function LanguageHelpPanel({ help, onClear }: { help: LanguageHelp | null; onCle
         )}
       </div>
       <div className="help-block">
-        <h5>Reading hints</h5>
-        <ul className="help-hints">
-          {hints.map((hint) => (
-            <li key={hint}>{hint}</li>
-          ))}
-        </ul>
+        <h5>Key words & chunks</h5>
+        {keyChunks.length ? (
+          <div className="help-chunk-list">
+            {keyChunks.map((chunk) => (
+              <article className="help-chunk-card" key={`${chunk.source}:${chunk.surface}`}>
+                <div>
+                  <b>{chunk.surface}</b>
+                  <span>{chunk.label} · {chunk.source === 'quest-glossary' ? 'quest glossary' : 'built-in local list'}</span>
+                </div>
+                <strong>{chunk.meaningZh}</strong>
+                <p>{chunk.note}</p>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p className="help-empty">No local chunk rules matched beyond the sentence itself.</p>
+        )}
       </div>
-      <p className="help-disclaimer">Local hints only — not a full dictionary or AI grammar parser.</p>
+      <div className="help-block">
+        <h5>Grammar pattern cards</h5>
+        {patterns.length ? (
+          <div className="help-pattern-list">
+            {patterns.map((pattern) => (
+              <article className="help-pattern-card" key={pattern.id}>
+                <div>
+                  <b>{pattern.label}</b>
+                  <span>{pattern.id}</span>
+                </div>
+                {pattern.evidence && <code>{pattern.evidence}</code>}
+                <p>{pattern.explanation}</p>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p className="help-empty">No grammar pattern rule fired; use the reading strategy as a fallback.</p>
+        )}
+      </div>
+      <div className="help-strategy">
+        <h5>Reading strategy</h5>
+        <p>{readingStrategy}</p>
+      </div>
+      <p className="help-disclaimer">Honest MVP: deterministic local rules from the selected quest text and a small built-in list. This is not a full dictionary, AI grammar parser, or external lookup.</p>
       <button className="mini-btn help-clear" type="button" onClick={onClear}>Clear language help</button>
     </section>
   )
@@ -2238,63 +2268,6 @@ function groupQuestsByChapter(quests: MainQuestOption[]) {
     groups.set(quest.chapter, current)
   })
   return [...groups.entries()]
-}
-
-function buildLanguageHelp(quest: QuestResponse, selectedLineId: string): LanguageHelp | null {
-  if (!selectedLineId) return null
-  const line = quest.lines.find((candidate) => candidate.id === selectedLineId)
-  if (!line) return null
-
-  return {
-    line,
-    terms: matchLineGlossaryTerms(quest.terms, line),
-    hints: buildGrammarHints(line),
-  }
-}
-
-function matchLineGlossaryTerms(terms: GlossaryTerm[], line: QuestLine) {
-  const normalizedLineEn = normalizeHelpText(line.en)
-  const normalizedLineZh = normalizeHelpText(line.zh)
-  const matched = new Map<string, GlossaryTerm>()
-
-  terms.forEach((term) => {
-    const normalizedEn = normalizeHelpText(term.en)
-    const normalizedZh = normalizeHelpText(term.zh)
-    const englishMatch = normalizedEn.length >= 3 && normalizedLineEn.includes(normalizedEn)
-    const chineseMatch = Boolean(normalizedZh && normalizedLineZh.includes(normalizedZh))
-
-    if (!englishMatch && !chineseMatch) return
-    matched.set(`${normalizedEn}|${normalizedZh}`, term)
-  })
-
-  return [...matched.values()].sort((left, right) => right.en.length - left.en.length).slice(0, 6)
-}
-
-function buildGrammarHints(line: QuestLine) {
-  const text = `${line.en} ${line.zh}`
-  const hints: string[] = []
-
-  if (/[?？]/.test(text)) {
-    hints.push('Question form: read for what the speaker is asking, requesting, or checking.')
-  }
-  if (/(["“”「」『』《》])|(^|[\s([{])'[^']+'(?=$|[\s,.;:!?)}\]])/.test(text)) {
-    hints.push('Direct speech: quoted words are being repeated or named inside the line.')
-  }
-  if (/\b(can|could|will|would|should|must|may|might)\b/i.test(line.en)) {
-    hints.push('Modal verb: note the attitude — ability, possibility, advice, duty, or future intent.')
-  }
-  if (/\b\w+['’](?:m|re|ve|ll|d|s|t)\b/i.test(line.en)) {
-    hints.push('Spoken contraction: the shortened form makes the line sound more conversational.')
-  }
-  if (line.type === 'choice') {
-    hints.push('Player-choice phrasing: read it as an option the player can select, not neutral narration.')
-  }
-
-  return (hints.length ? hints : ['Role and intent: identify who is speaking, what they want, and how the Chinese line frames the same idea.']).slice(0, 3)
-}
-
-function normalizeHelpText(value: string) {
-  return value.normalize('NFKC').replace(/[’]/g, "'").replace(/\s+/g, ' ').trim().toLowerCase()
 }
 
 function DialogueCard({
