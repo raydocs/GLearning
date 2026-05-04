@@ -36,6 +36,10 @@ type GameId = Game['id']
 type DensityId = (typeof DENSITIES)[number]['id']
 type RightTabId = (typeof RIGHT_TABS)[number]['id']
 type LineStudyStatus = 'unread' | 'heard' | 'mastered'
+type AppRoute =
+  | { page: 'home' }
+  | { page: 'game'; gameId: GameId }
+  | { page: 'saved' }
 
 type LineStudyState = {
   revealedAt?: string
@@ -64,6 +68,10 @@ type SavedLineItem = {
   speakerZh: string
   en: string
   zh: string
+  questTitle?: string
+  questZhTitle?: string
+  sourceEnUrl?: string
+  sourceZhUrl?: string
   savedAt: string
   updatedAt: string
 }
@@ -75,6 +83,10 @@ type SavedTermItem = {
   questKey: string
   en: string
   zh: string
+  questTitle?: string
+  questZhTitle?: string
+  sourceEnUrl?: string
+  sourceZhUrl?: string
   savedAt: string
   updatedAt: string
 }
@@ -129,10 +141,12 @@ type ReaderStats = {
 }
 
 function App() {
-  const [routeGameId, setRouteGameId] = useState<GameId | null>(() => getInitialRouteGameId())
-  const activeGame = useMemo(() => getGame(routeGameId || LIVE_GAME_ID), [routeGameId])
-  const isHome = routeGameId === null
-  const isLiveGame = activeGame.id === LIVE_GAME_ID
+  const [route, setRoute] = useState<AppRoute>(() => getInitialRoute())
+  const isReaderRoute = route.page === 'game'
+  const activeGame = useMemo(() => getGame(isReaderRoute ? route.gameId : LIVE_GAME_ID), [isReaderRoute, route])
+  const isHome = route.page === 'home'
+  const isSavedRoute = route.page === 'saved'
+  const isLiveGame = isReaderRoute && activeGame.id === LIVE_GAME_ID
   const [enUrl, setEnUrl] = useState(DEFAULT_EN_URL)
   const [zhUrl, setZhUrl] = useState(DEFAULT_ZH_URL)
   const [questCatalog, setQuestCatalog] = useState<MainQuestOption[]>([])
@@ -156,7 +170,7 @@ function App() {
   const [reviewNowMs, setReviewNowMs] = useState(() => Date.now())
 
   const activePalette = activeGame.palettes.find((palette) => palette.id === paletteId) || activeGame.palettes[0]
-  const readerData = useMemo(() => (isLiveGame ? quest : createSampleQuest(activeGame)), [activeGame, isLiveGame, quest])
+  const readerData = useMemo(() => (isReaderRoute ? (isLiveGame ? quest : createSampleQuest(activeGame)) : null), [activeGame, isLiveGame, isReaderRoute, quest])
   const hasQuestAudio = Boolean(readerData?.meta.audioCount)
   const audioAvailabilityLabel = hasQuestAudio ? `${readerData?.meta.audioCount || 0} playable clips` : 'No playable clips yet'
   const audioAvailabilityHint = hasQuestAudio ? `Audio only · ${audioAvailabilityLabel}` : 'Audio-only unavailable · this sample has no playable clips yet.'
@@ -215,7 +229,7 @@ function App() {
 
   useEffect(() => {
     function handleRouteChange() {
-      setRouteGameId(getRouteGameId())
+      setRoute(getRoute())
     }
 
     window.addEventListener('popstate', handleRouteChange)
@@ -383,6 +397,7 @@ function App() {
           speakerZh: line.speakerZh || '',
           en: line.en,
           zh: line.zh,
+          ...getSavedSourceMetadata(readerData),
           savedAt: now,
           updatedAt: now,
         },
@@ -411,6 +426,7 @@ function App() {
           questKey: questStudyIdentity.questKey,
           en: term.en,
           zh: term.zh,
+          ...getSavedSourceMetadata(readerData),
           savedAt: now,
           updatedAt: now,
         },
@@ -433,6 +449,16 @@ function App() {
 
   function removeReviewState(itemId: string) {
     setReviewItemsById((current) => {
+      if (!current[itemId]) return current
+      const { [itemId]: removed, ...rest } = current
+      void removed
+      return rest
+    })
+  }
+
+  function removeSavedItem(itemId: string) {
+    removeReviewState(itemId)
+    setSavedItemsById((current) => {
       if (!current[itemId]) return current
       const { [itemId]: removed, ...rest } = current
       void removed
@@ -535,10 +561,25 @@ function App() {
     URL.revokeObjectURL(link.href)
   }
 
-  function navigateToGame(gameId: GameId | null) {
-    const nextPath = gameId ? `/games/${gameId}` : '/'
-    window.history.pushState({}, '', nextPath)
-    setRouteGameId(gameId)
+  function navigateToGame(gameId: GameId) {
+    window.history.pushState({}, '', `/games/${gameId}`)
+    setRoute({ page: 'game', gameId })
+    resetReaderControls()
+  }
+
+  function navigateHome() {
+    window.history.pushState({}, '', '/')
+    setRoute({ page: 'home' })
+    resetReaderControls()
+  }
+
+  function navigateToSaved() {
+    window.history.pushState({}, '', '/saved')
+    setRoute({ page: 'saved' })
+    resetReaderControls()
+  }
+
+  function resetReaderControls() {
     setSearch('')
     setSpeaker('all')
     setAudioOnly(false)
@@ -546,7 +587,22 @@ function App() {
   }
 
   if (isHome) {
-    return <HomePage games={GAMES} onOpenGame={navigateToGame} />
+    return <HomePage games={GAMES} onOpenGame={navigateToGame} onOpenSaved={navigateToSaved} />
+  }
+
+  if (isSavedRoute) {
+    return (
+      <GlobalSavedPage
+        games={GAMES}
+        savedItems={Object.values(savedItemsById)}
+        reviewItemsById={reviewItemsById}
+        reviewNowMs={reviewNowMs}
+        onHome={navigateHome}
+        onOpenGame={navigateToGame}
+        onGradeReview={gradeSavedReview}
+        onRemoveSavedItem={removeSavedItem}
+      />
+    )
   }
 
   return (
@@ -563,8 +619,11 @@ function App() {
         <GameTabs activeGame={activeGame} onPick={navigateToGame} />
 
         <div className="top-actions">
-          <button className="icon-btn" type="button" data-hint="Game library" onClick={() => navigateToGame(null)}>
+          <button className="icon-btn" type="button" data-hint="Game library" onClick={navigateHome}>
             ⌂
+          </button>
+          <button className="icon-btn" type="button" data-hint="Global saved library" onClick={navigateToSaved}>
+            ★
           </button>
           <button className="icon-btn" type="button" data-hint={isLiveGame ? 'Load current URLs' : 'Sample reader'} onClick={() => void loadQuest()} disabled={!isLiveGame || isLoading}>
             {isLoading ? '…' : '↻'}
@@ -889,13 +948,21 @@ function App() {
         setHideChinese={setHideChinese}
         savedCount={activeGameSavedCount}
         dueReviewCount={activeGameDueReviewCount}
-        onHome={() => navigateToGame(null)}
+        onHome={navigateHome}
       />
     </>
   )
 }
 
-function HomePage({ games, onOpenGame }: { games: readonly Game[]; onOpenGame: (gameId: GameId) => void }) {
+function HomePage({
+  games,
+  onOpenGame,
+  onOpenSaved,
+}: {
+  games: readonly Game[]
+  onOpenGame: (gameId: GameId) => void
+  onOpenSaved: () => void
+}) {
   const [selectedGameId, setSelectedGameId] = useState<GameId>('starrail')
   const selectedGame = getGame(selectedGameId)
   const isSelectedLiveGame = selectedGame.id === LIVE_GAME_ID
@@ -932,7 +999,7 @@ function HomePage({ games, onOpenGame }: { games: readonly Game[]; onOpenGame: (
           <button className="icon-btn" type="button" data-hint="Daily timer planned" disabled>
             ◴
           </button>
-          <button className="icon-btn" type="button" data-hint="Saved list lives in reader; global page planned" disabled>
+          <button className="icon-btn" type="button" data-hint="Open local saved library" onClick={onOpenSaved}>
             ★
           </button>
           <button className="icon-btn" type="button" data-hint="Settings/profile planned" disabled>
@@ -1042,6 +1109,214 @@ function GameTabs({ activeGame, onPick }: { activeGame: Game; onPick: (gameId: G
         </button>
       ))}
     </nav>
+  )
+}
+
+function GlobalSavedPage({
+  games,
+  savedItems,
+  reviewItemsById,
+  reviewNowMs,
+  onHome,
+  onOpenGame,
+  onGradeReview,
+  onRemoveSavedItem,
+}: {
+  games: readonly Game[]
+  savedItems: SavedItem[]
+  reviewItemsById: Record<string, ReviewItemState>
+  reviewNowMs: number
+  onHome: () => void
+  onOpenGame: (gameId: GameId) => void
+  onGradeReview: (itemId: string, grade: ReviewGrade) => void
+  onRemoveSavedItem: (itemId: string) => void
+}) {
+  const [gameFilter, setGameFilter] = useState<'all' | GameId>('all')
+  const [kindFilter, setKindFilter] = useState<'all' | SavedItem['type']>('all')
+  const [dueFilter, setDueFilter] = useState<'all' | 'due'>('all')
+  const [search, setSearch] = useState('')
+  const [showReviewAnswer, setShowReviewAnswer] = useState(false)
+  const gameById = useMemo(() => new Map<string, Game>(games.map((game) => [game.id, game])), [games])
+  const dueItems = useMemo(() => getDueReviewItems(savedItems, reviewItemsById, reviewNowMs), [reviewItemsById, reviewNowMs, savedItems])
+  const activeReviewItem = dueItems[0]
+  const savedLines = savedItems.filter((item) => item.type === 'line').length
+  const savedTerms = savedItems.length - savedLines
+  const representedGames = new Set(savedItems.map((item) => item.gameId)).size
+  const normalizedSearch = search.trim().toLowerCase()
+
+  const filteredItems = useMemo(() => {
+    return savedItems
+      .filter((item) => {
+        const game = gameById.get(item.gameId)
+        if (gameFilter !== 'all' && item.gameId !== gameFilter) return false
+        if (kindFilter !== 'all' && item.type !== kindFilter) return false
+        if (dueFilter === 'due' && !isReviewDue(item.id, reviewItemsById, reviewNowMs)) return false
+        if (!normalizedSearch) return true
+        return getSavedItemSearchText(item, game).includes(normalizedSearch)
+      })
+      .sort((left, right) => sortSavedItemsForLibrary(left, right, reviewItemsById, reviewNowMs))
+  }, [dueFilter, gameById, gameFilter, kindFilter, normalizedSearch, reviewItemsById, reviewNowMs, savedItems])
+
+  useEffect(() => {
+    setShowReviewAnswer(false)
+  }, [activeReviewItem?.id])
+
+  function gradeReview(grade: ReviewGrade) {
+    if (!activeReviewItem) return
+    onGradeReview(activeReviewItem.id, grade)
+    setShowReviewAnswer(false)
+  }
+
+  return (
+    <>
+      <header className="topbar saved-topbar">
+        <div className="brand">
+          <div className="brand-mark">★</div>
+          <div className="brand-text">
+            <div className="brand-name">GLearning · Saved</div>
+            <div className="brand-sub">Local saved lines, terms, and reviews</div>
+          </div>
+        </div>
+        <GameTabs activeGame={getGame(LIVE_GAME_ID)} onPick={onOpenGame} />
+        <div className="top-actions">
+          <button className="icon-btn" type="button" data-hint="Game library" onClick={onHome}>
+            ⌂
+          </button>
+        </div>
+      </header>
+
+      <main className="saved-page">
+        <LandingBackdrop game={getGame(LIVE_GAME_ID)} />
+        <section className="saved-hero">
+          <div>
+            <div className="home-kicker">● Local-only library · no account or cloud sync</div>
+            <h1>Saved lines & review queue.</h1>
+            <p>
+              Browse saved dialogue lines and glossary terms across game pages in this browser. Quest restore is planned; this MVP opens the game reader and keeps saved/review data local.
+            </p>
+          </div>
+          <div className="saved-summary-grid" aria-label="Saved library totals">
+            <div><b>{savedItems.length}</b><span>Total saved</span></div>
+            <div><b>{dueItems.length}</b><span>Due now</span></div>
+            <div><b>{savedLines}</b><span>Lines</span></div>
+            <div><b>{savedTerms}</b><span>Terms</span></div>
+            <div><b>{representedGames}</b><span>Games</span></div>
+          </div>
+        </section>
+
+        <section className="saved-library-grid">
+          <section className="panel review-panel saved-review-spotlight">
+            <h4>First due review · 复习 <span className="pill">{dueItems.length} due</span></h4>
+            {activeReviewItem ? (
+              <div className="review-card" aria-live="polite">
+                <div className="review-kicker">
+                  <span className={`saved-type ${activeReviewItem.type}`}>{activeReviewItem.type === 'line' ? 'Line' : 'Term'}</span>
+                  <small>{getSavedItemGameLabel(activeReviewItem, gameById.get(activeReviewItem.gameId))} · {getSavedItemQuestLabel(activeReviewItem)}</small>
+                </div>
+                <p className="review-prompt">{getSavedItemPrompt(activeReviewItem)}</p>
+                {showReviewAnswer ? (
+                  <>
+                    <div className="review-answer">
+                      <span>Answer</span>
+                      <b>{getSavedItemAnswer(activeReviewItem)}</b>
+                    </div>
+                    <div className="review-actions">
+                      <button className="act-btn again-btn" type="button" onClick={() => gradeReview('again')}>Again · 10m</button>
+                      <button className="act-btn know-btn" type="button" onClick={() => gradeReview('know')}>Know · later</button>
+                    </div>
+                  </>
+                ) : (
+                  <button className="primary-btn review-show" type="button" onClick={() => setShowReviewAnswer(true)}>Show answer</button>
+                )}
+              </div>
+            ) : (
+              <p className="saved-empty">No saved lines or terms are due right now. New saved items appear here until reviewed.</p>
+            )}
+            <p className="review-note">Uses the existing local schedule: Again is about 10 minutes; Know starts at 1 day and grows later.</p>
+          </section>
+
+          <section className="panel saved-filter-panel">
+            <h4>Browse saved · 筛选 <span className="pill">{filteredItems.length}</span></h4>
+            <div className="saved-filter-row">
+              <label className="search-field">
+                <span>Search</span>
+                <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="speaker, quest, English, 中文..." />
+              </label>
+              <label className="search-field">
+                <span>Game</span>
+                <select value={gameFilter} onChange={(event) => setGameFilter(event.target.value as 'all' | GameId)}>
+                  <option value="all">All games</option>
+                  {games.map((game) => (
+                    <option key={game.id} value={game.id}>{game.name} · {game.cn}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="search-field">
+                <span>Type</span>
+                <select value={kindFilter} onChange={(event) => setKindFilter(event.target.value as 'all' | SavedItem['type'])}>
+                  <option value="all">All</option>
+                  <option value="line">Lines</option>
+                  <option value="term">Terms</option>
+                </select>
+              </label>
+              <label className="search-field">
+                <span>Due</span>
+                <select value={dueFilter} onChange={(event) => setDueFilter(event.target.value as 'all' | 'due')}>
+                  <option value="all">All saved</option>
+                  <option value="due">Due now</option>
+                </select>
+              </label>
+            </div>
+          </section>
+        </section>
+
+        <section className="global-saved-list" aria-label="Global saved items">
+          {filteredItems.length ? (
+            filteredItems.map((item) => {
+              const game = gameById.get(item.gameId)
+              const dueStatus = getSavedItemDueStatus(item, reviewItemsById, reviewNowMs)
+              return (
+                <article className="global-saved-card" key={item.id}>
+                  <div className="global-saved-card-header">
+                    <div className="saved-game-chip">
+                      <span>{game?.glyph || 'G'}</span>
+                      <b>{getSavedItemGameLabel(item, game)}</b>
+                      <small>{game?.cn || item.gameId}</small>
+                    </div>
+                    <span className={`saved-type ${item.type}`}>{item.type === 'line' ? 'Line' : 'Term'}</span>
+                    <span className={`saved-due-pill ${dueStatus.tone}`}>{dueStatus.label}</span>
+                  </div>
+                  <div className="global-saved-card-body">
+                    <small>{getSavedItemQuestLabel(item)}{dueStatus.detail ? ` · ${dueStatus.detail}` : ''}</small>
+                    <h3>{getSavedItemPrompt(item)}</h3>
+                    <p>{getSavedItemAnswer(item)}</p>
+                    {item.type === 'line' && (item.speakerEn || item.speakerZh) && <em>{item.speakerEn || item.speakerZh}</em>}
+                    {(isWebUrl(item.sourceEnUrl) || isWebUrl(item.sourceZhUrl)) && (
+                      <div className="saved-source-links">
+                        {isWebUrl(item.sourceEnUrl) && <a href={item.sourceEnUrl} target="_blank" rel="noreferrer">EN source</a>}
+                        {isWebUrl(item.sourceZhUrl) && <a href={item.sourceZhUrl} target="_blank" rel="noreferrer">ZH source</a>}
+                      </div>
+                    )}
+                  </div>
+                  <div className="global-saved-card-actions">
+                    <button className="mini-btn primary" type="button" onClick={() => onOpenGame((game?.id || LIVE_GAME_ID) as GameId)}>Open game</button>
+                    <button className="mini-btn danger" type="button" onClick={() => onRemoveSavedItem(item.id)}>Remove</button>
+                  </div>
+                </article>
+              )
+            })
+          ) : (
+            <div className="saved-empty-state">
+              <div className="empty-glyph" aria-hidden="true">★</div>
+              <div>
+                <h3>No saved items match.</h3>
+                <p>Save a dialogue line or glossary term in any reader, or relax the current filters. Data stays in this browser only.</p>
+              </div>
+            </div>
+          )}
+        </section>
+      </main>
+    </>
   )
 }
 
@@ -1558,17 +1833,22 @@ function getGame(gameId: string) {
   return GAMES.find((game) => game.id === gameId) || GAMES[0]
 }
 
-function getInitialRouteGameId(): GameId | null {
-  if (typeof window === 'undefined') return LIVE_GAME_ID
-  return getRouteGameId()
+function getInitialRoute(): AppRoute {
+  if (typeof window === 'undefined') return { page: 'game', gameId: LIVE_GAME_ID }
+  return getRoute()
 }
 
-function getRouteGameId(): GameId | null {
-  const pathMatch = window.location.pathname.match(/^\/games\/([^/?#]+)/)
-  const hashMatch = window.location.hash.match(/^#\/?games\/([^/?#]+)/)
+function getRoute(): AppRoute {
+  const path = window.location.pathname
+  const hash = window.location.hash
+  if (/^\/saved\/?$/.test(path) || /^#\/?saved\/?$/.test(hash)) return { page: 'saved' }
+
+  const pathMatch = path.match(/^\/games\/([^/?#]+)/)
+  const hashMatch = hash.match(/^#\/?games\/([^/?#]+)/)
   const candidate = pathMatch?.[1] || hashMatch?.[1]
-  if (!candidate) return null
-  return GAMES.some((game) => game.id === candidate) ? (candidate as GameId) : null
+  if (candidate && GAMES.some((game) => game.id === candidate)) return { page: 'game', gameId: candidate as GameId }
+
+  return { page: 'home' }
 }
 
 function getInitialPalette(game: Game) {
@@ -1757,6 +2037,80 @@ function getReviewDueMs(itemId: string, reviewItems: Record<string, ReviewItemSt
   return Number.isFinite(dueMs) ? dueMs : 0
 }
 
+function getSavedSourceMetadata(quest: QuestResponse | null) {
+  if (!quest) return {}
+  return {
+    ...(quest.meta.enTitle ? { questTitle: quest.meta.enTitle } : {}),
+    ...(quest.meta.zhTitle ? { questZhTitle: quest.meta.zhTitle } : {}),
+    ...(quest.source.enUrl ? { sourceEnUrl: quest.source.enUrl } : {}),
+    ...(quest.source.zhUrl ? { sourceZhUrl: quest.source.zhUrl } : {}),
+  }
+}
+
+function optionalSavedString(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value : undefined
+}
+
+function isWebUrl(value: unknown): value is string {
+  return typeof value === 'string' && /^https?:\/\//i.test(value)
+}
+
+function getSavedItemQuestLabel(item: SavedItem) {
+  return item.questTitle || item.questZhTitle || (item.questKey ? `Quest ${item.questKey.slice(0, 6)}` : 'Saved quest')
+}
+
+function getSavedItemGameLabel(item: SavedItem, game: Game | undefined) {
+  return game ? game.name : item.gameId || 'Unknown game'
+}
+
+function getSavedItemPrompt(item: SavedItem) {
+  return item.type === 'line' ? item.en || item.zh || 'Saved dialogue' : item.en || item.zh || 'Saved term'
+}
+
+function getSavedItemAnswer(item: SavedItem) {
+  return item.type === 'line' ? item.zh || item.en || 'No answer text saved' : item.zh || item.en || 'No translation saved'
+}
+
+function getSavedItemSearchText(item: SavedItem, game: Game | undefined) {
+  return [
+    getSavedItemGameLabel(item, game),
+    game?.cn,
+    item.questTitle,
+    item.questZhTitle,
+    item.type,
+    item.en,
+    item.zh,
+    item.type === 'line' ? item.speakerEn : '',
+    item.type === 'line' ? item.speakerZh : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+}
+
+function getSavedItemDueStatus(item: SavedItem, reviewItems: Record<string, ReviewItemState>, nowMs: number) {
+  const reviewState = reviewItems[item.id]
+  const dueMs = getReviewDueMs(item.id, reviewItems)
+  if (!reviewState) return { label: 'Due now', detail: 'No review yet', tone: 'due' }
+  if (dueMs <= nowMs) return { label: 'Due now', detail: reviewState.lastGrade ? `Last: ${reviewState.lastGrade}` : '', tone: 'due' }
+  return { label: 'Scheduled', detail: formatReviewDue(dueMs, nowMs), tone: 'scheduled' }
+}
+
+function sortSavedItemsForLibrary(left: SavedItem, right: SavedItem, reviewItems: Record<string, ReviewItemState>, nowMs: number) {
+  const leftDue = isReviewDue(left.id, reviewItems, nowMs)
+  const rightDue = isReviewDue(right.id, reviewItems, nowMs)
+  if (leftDue !== rightDue) return leftDue ? -1 : 1
+  return getReviewDueMs(left.id, reviewItems) - getReviewDueMs(right.id, reviewItems) || right.updatedAt.localeCompare(left.updatedAt)
+}
+
+function formatReviewDue(dueMs: number, nowMs: number) {
+  const minutes = Math.max(1, Math.round((dueMs - nowMs) / 60000))
+  if (minutes < 60) return `Due in ${minutes}m`
+  const hours = Math.round(minutes / 60)
+  if (hours < 48) return `Due in ${hours}h`
+  return `Due in ${Math.round(hours / 24)}d`
+}
+
 function sanitizeSavedItems(value: Record<string, SavedItem>) {
   const items: Record<string, SavedItem> = {}
 
@@ -1776,6 +2130,10 @@ function sanitizeSavedItems(value: Record<string, SavedItem>) {
         speakerZh: typeof item.speakerZh === 'string' ? item.speakerZh : '',
         en: typeof item.en === 'string' ? item.en : '',
         zh: typeof item.zh === 'string' ? item.zh : '',
+        ...(optionalSavedString(item.questTitle) ? { questTitle: optionalSavedString(item.questTitle) } : {}),
+        ...(optionalSavedString(item.questZhTitle) ? { questZhTitle: optionalSavedString(item.questZhTitle) } : {}),
+        ...(optionalSavedString(item.sourceEnUrl) ? { sourceEnUrl: optionalSavedString(item.sourceEnUrl) } : {}),
+        ...(optionalSavedString(item.sourceZhUrl) ? { sourceZhUrl: optionalSavedString(item.sourceZhUrl) } : {}),
         savedAt: typeof item.savedAt === 'string' ? item.savedAt : '',
         updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : typeof item.savedAt === 'string' ? item.savedAt : '',
       }
@@ -1789,6 +2147,10 @@ function sanitizeSavedItems(value: Record<string, SavedItem>) {
       questKey: item.questKey,
       en: typeof item.en === 'string' ? item.en : '',
       zh: typeof item.zh === 'string' ? item.zh : '',
+      ...(optionalSavedString(item.questTitle) ? { questTitle: optionalSavedString(item.questTitle) } : {}),
+      ...(optionalSavedString(item.questZhTitle) ? { questZhTitle: optionalSavedString(item.questZhTitle) } : {}),
+      ...(optionalSavedString(item.sourceEnUrl) ? { sourceEnUrl: optionalSavedString(item.sourceEnUrl) } : {}),
+      ...(optionalSavedString(item.sourceZhUrl) ? { sourceZhUrl: optionalSavedString(item.sourceZhUrl) } : {}),
       savedAt: typeof item.savedAt === 'string' ? item.savedAt : '',
       updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : typeof item.savedAt === 'string' ? item.savedAt : '',
     }

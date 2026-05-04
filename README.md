@@ -8,16 +8,21 @@ Chinese documentation: [README.zh-CN.md](./README.zh-CN.md)
 
 ## What Is Live Today
 
-The production app has two layers:
+The production app has three local-first layers:
 
 - A multi-game landing page with per-game routes, palettes, decorative motifs, and launch-honest live/sample status copy.
 - A real Wuthering Waves reader backed by live wiki/API data, not mock dialogue.
+- A browser-local `/saved` library for cross-game saved lines, saved terms, and due review browsing.
 
 Wuthering Waves is currently the only game with a live data connector. The other game pages are launch-honest sample readers with curated dialogue/glossary content, so bilingual reading, save, review, export, and language-help flows are usable without pretending that a live connector exists.
 
 Audio at launch is an honest playback MVP: Wuthering Waves can play available source clips line by line, while sample readers intentionally show 0 playable clips until a real connector is added. Voice recording, pronunciation scoring, TTS, and generated/new audio sources are deferred.
 
-## Supported Game Pages
+## Supported Routes
+
+The local saved/review library route is:
+
+- `/saved` — browser-local saved lines, glossary terms, and first-due review card across games. It reuses `glearning-saves-v1` and `glearning-review-v1`; there is no account or cloud sync.
 
 Each game has its own route and visual system:
 
@@ -67,6 +72,7 @@ Explicit Chinese URLs still work for manual source pairing:
 - Dialogue stream with speaker labels, Chinese reveal mode, search, speaker filter, density controls, and audio-only mode.
 - Browser-local per-line study progress: played, revealed, and mastered state persists per game/quest.
 - Browser-local saved dialogue lines and glossary terms persist in `localStorage` key `glearning-saves-v1`, scoped by game and quest, with a compact recent list in the Study panel.
+- Global Saved & Review Library MVP at `/saved`: browse saved lines/terms across games, search/filter by game/type/due status, see totals and due counts, review the first due item with Show answer → Again/Know, remove saved items plus associated review state, and open the relevant game reader. Quest/line restoration is not claimed yet.
 - Browser-local due review queue persists in `localStorage` key `glearning-review-v1`: saved lines/terms with no review state are due now, `Again` schedules about 10 minutes out, and `Know` grows a simple local interval.
 - Audio playback with local MP3 preference for bundled Wuthering Waves voice files; sample games intentionally have no playable source clips unless a connector is added, and audio-only controls are disabled or labeled unavailable when the current quest/sample has no playable clips.
 - Study panel with glossary terms, saved term toggles, and a lightweight saved line/term review card.
@@ -88,7 +94,7 @@ Explicit Chinese URLs still work for manual source pairing:
 Important paths:
 
 ```text
-src/App.tsx                  Main React app, routes, reader shell, landing page
+src/App.tsx                  Main React app, routes, reader shell, landing page, saved library
 src/styles.css               Visual system, themes, landing/reader styling
 src/gameData.ts              Multi-game metadata, palettes, sample dialogue, glossary
 src/types.ts                 Shared client data types
@@ -122,7 +128,7 @@ Run the full Pages environment:
 npm run pages:dev
 ```
 
-Use `pages:dev` when testing `/api/quest`, `/api/main-quests`, audio playback availability, or direct game routes.
+Use `pages:dev` when testing `/api/quest`, `/api/main-quests`, audio playback availability, or direct `/saved` and game routes.
 
 Build for production:
 
@@ -206,6 +212,7 @@ In another terminal while `pages:dev` is running:
 
 ```bash
 curl -i http://127.0.0.1:8788/
+curl -i http://127.0.0.1:8788/saved
 curl -i http://127.0.0.1:8788/games/wuwa
 curl -i http://127.0.0.1:8788/games/cyberpunk
 curl -s http://127.0.0.1:8788/api/main-quests | node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(0,'utf8'));console.log('quests',p.quests?.length)"
@@ -225,6 +232,7 @@ After `npm run deploy`, run the same route/API checks against the preview URL an
 ```bash
 BASE_URL=https://glearning.pages.dev
 curl -i "$BASE_URL/"
+curl -i "$BASE_URL/saved"
 curl -i "$BASE_URL/games/wuwa"
 curl -i "$BASE_URL/games/cyberpunk"
 curl -i "$BASE_URL/index.html"
@@ -241,7 +249,8 @@ For the 2026-05-04 Plus closeout deploy, preview `https://6ef1b11f.glearning.pag
 - Sample/status honesty copy is visible where expected.
 - Audio controls behave honestly (available when clips exist; disabled/unavailable when clips do not).
 - Study/save/review/language-help flows still work.
-- Export panel shows P6 defer copy: TSV-only MVP; share cards/profiles/accounts/cloud sync/public pages deferred; saved/review data local to browser.
+- `/saved` opens from the Home ★ control, shows local totals/due counts, can filter saved lines/terms across games, can Show answer → Again/Know on the first due review, and can remove a saved item plus its review state.
+- Export panel shows defer copy: TSV-only MVP; share cards/profiles/accounts/cloud sync/public pages deferred; saved/review data local to browser.
 - No visible profile/account/share controls that silently no-op.
 
 ## Regression Checks
@@ -249,6 +258,7 @@ For the 2026-05-04 Plus closeout deploy, preview `https://6ef1b11f.glearning.pag
 After UI or API changes, verify at least these production behaviors:
 
 - `/` returns the landing page.
+- `/saved` and `/saved/` return the SPA saved library route through explicit Pages fallbacks, without reintroducing a broad `/*` redirect.
 - `/games/wuwa` returns the live Wuthering Waves reader route.
 - `/games/cyberpunk` or another sample game route returns through the SPA fallback and is labeled as sample reader status (not live connector).
 - `/api/main-quests` returns a populated quest list.
@@ -257,12 +267,13 @@ After UI or API changes, verify at least these production behaviors:
 - Explicit BWIKI URLs still work for the default pair.
 - Per-line study state persists locally: reveal or master a line, reload the route, and confirm `localStorage` contains a `glearning-study-v1:*` key with the same played/revealed/mastered counts. Progress is browser-local and not account-synced.
 - Saved dialogue lines and glossary terms persist locally: save a line and a glossary term, change routes or reload, and confirm `localStorage.glearning-saves-v1` keeps those items separated by `gameId` and `questKey`. The ReaderDock saved count reflects the active game, while the Study panel list reflects the active quest.
-- Local saved-item review queue works without an account: after saving a line or glossary term, confirm it appears as due in the ReaderDock and Study panel because it has no `glearning-review-v1` state; use `Show answer` → `Again` and confirm the item is scheduled about 10 minutes out; reload and confirm `glearning-review-v1` persists; un-save the item and confirm its review-state entry is removed.
+- Global saved library works locally: open `/saved`, confirm saved items across games render with game/type/quest/source metadata when available and fallback quest labels for old saved items, search/filter by game/type/due, and use Open game without expecting exact quest/line restoration.
+- Local saved-item review queue works without an account: after saving a line or glossary term, confirm it appears as due in the ReaderDock, Study panel, and `/saved` because it has no `glearning-review-v1` state; use `Show answer` → `Again` and confirm the item is scheduled about 10 minutes out; reload and confirm `glearning-review-v1` persists; un-save or remove the item and confirm its review-state entry is removed.
 - Contextual language help is local and deterministic: click `Language help` on a dialogue card, confirm the Study panel opens with the selected speaker/context, EN/ZH snippets, glossary matches when quest terms appear in the line, up to three grammar/reading hints, and `Clear language help`; confirm it does not change played/revealed/mastered/saved local state.
 - Audio MVP honesty: on a Wuthering Waves quest with bundled/source clips, `Audio only` remains available and filters to playable dialogue lines; on sample games or any quest with `audioCount=0`, topbar/Study/ReaderDock audio-only controls are disabled or labeled unavailable, and the reader does not become blank from a stale audio-only setting. Empty reader states should explain no audio clips, no audio lines matching filters, no dialogue matching filters, or no loaded dialogue as applicable.
 - Landing/reader honesty: Wuthering Waves is the only live source connector at launch; other games are sample-reader pages with real study-loop UX but no live source connector or playable source clips yet.
 - Voice practice is explicitly deferred for launch: there is no recording, pronunciation scoring, TTS, generated audio, or account-backed voice feature in the current MVP.
-- Planned controls are explicitly disabled/labeled (for example: `Daily timer planned`, `Saved list lives in reader; global page planned`, `Settings/profile planned`, and non-live chapter routing marked planned) so visible controls do not silently no-op.
+- Planned controls are explicitly disabled/labeled (for example: `Daily timer planned`, `Settings/profile planned`, and non-live chapter routing marked planned) so visible controls do not silently no-op. The Home ★ saved control is active and routes to `/saved`.
 
 ## Content And Rights Note
 
@@ -271,8 +282,8 @@ GLearning fetches source pages on demand for personal study. Fandom, Kuro Wiki, 
 ## Roadmap
 
 - Add real connectors for more games after confirming source availability and rights constraints; once added, update each game page from sample-reader status to live connector status.
-- Add a global saved-items page once saved lines/terms need cross-game browsing outside the reader.
-- Improve the existing local saved-item review queue with richer scheduling, quiz modes, and cross-device sync once accounts/cloud storage exist.
+- Improve the `/saved` Global Saved & Review Library MVP with richer quiz modes, exact quest/line restoration, and better scheduling controls.
+- Add cross-device sync only after accounts/cloud storage exist; current saved/review data remains browser-local.
 - Keep launch export/share scope to TSV; defer share cards, profiles, accounts, cloud sync, and public progress pages.
 - Add voice recording and pronunciation scoring only after playback coverage, privacy, rights, and evaluation constraints are clear; current launch scope remains source-clip listening playback and only Wuthering Waves has connector-backed source authenticity/audio coverage.
 - Expand contextual language help beyond the local deterministic MVP with richer dictionary lookup and optional AI grammar parsing once source, cost, and accuracy constraints are clear.
