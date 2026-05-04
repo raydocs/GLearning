@@ -117,6 +117,7 @@ function App() {
     const root = document.documentElement
     root.dataset.game = activeGame.id
     root.dataset.theme = activePalette.id
+    document.body.dataset.game = activeGame.id
     root.style.setProperty('--bg', activePalette.bg)
     root.style.setProperty('--surface', activePalette.surface)
     root.style.setProperty('--surface-2', activePalette.surface)
@@ -278,6 +279,8 @@ function App() {
       </header>
 
       <main className="shell">
+        <ReaderBackdrop game={activeGame} />
+        <ReaderChrome game={activeGame} />
         <aside className="rail left-rail">
           <section className="source-panel game-switcher">
             <h4>Games <span className="pill">{GAMES.length}</span></h4>
@@ -504,6 +507,17 @@ function App() {
           {readerData && sidePanel === 'export' && <ExportPanel quest={readerData} exportTsv={exportTsv} isLive={isLiveGame} />}
         </aside>
       </main>
+      <ReaderDock
+        game={activeGame}
+        quest={readerData}
+        stats={stats}
+        isLive={isLiveGame}
+        audioOnly={audioOnly}
+        setAudioOnly={setAudioOnly}
+        hideChinese={hideChinese}
+        setHideChinese={setHideChinese}
+        onHome={() => navigateToGame(null)}
+      />
     </>
   )
 }
@@ -534,17 +548,29 @@ function HomePage({ games, onOpenGame }: { games: readonly Game[]; onOpenGame: (
 
       <main className="home-page">
         <section className="home-hero">
-          <div className="home-kicker">GLearning library</div>
-          <h1>Learn English through the games you already care about.</h1>
-          <p>
-            A themed bilingual reader for each world: live quest dialogue for Wuthering Waves today, and prototype study rooms ready for the next game connectors.
-          </p>
-          <div className="home-actions">
-            <button className="primary-btn home-primary" type="button" onClick={() => onOpenGame(liveGame.id)}>
-              Open live Wuthering Waves reader
-            </button>
-            <span>{games.length} game pages · per-game palettes · exportable lines</span>
+          <div className="home-copy">
+            <div className="home-kicker">GLearning library</div>
+            <h1>Learn English through the games you already care about.</h1>
+            <p>
+              A themed bilingual reader for each world: live quest dialogue for Wuthering Waves today, and prototype study rooms ready for the next game connectors.
+            </p>
+            <div className="home-actions">
+              <button className="primary-btn home-primary" type="button" onClick={() => onOpenGame(liveGame.id)}>
+                Open live Wuthering Waves reader
+              </button>
+              <span>{games.length} game pages · per-game palettes · exportable lines</span>
+            </div>
           </div>
+          <button className="home-poster" type="button" onClick={() => onOpenGame(liveGame.id)}>
+            <span className="poster-badge">live API</span>
+            <span className="poster-glyph">{liveGame.glyph}</span>
+            <span className="poster-frame" />
+            <span className="poster-meta">
+              <small>{liveGame.studio}</small>
+              <b>{liveGame.name}</b>
+              <em>{liveGame.cnTagline}</em>
+            </span>
+          </button>
         </section>
 
         <section className="game-grid" aria-label="Game pages">
@@ -565,8 +591,89 @@ function HomePage({ games, onOpenGame }: { games: readonly Game[]; onOpenGame: (
             </article>
           ))}
         </section>
+
+        <section className="home-features" aria-label="Reader features">
+          <div className="home-features-head">
+            <h2>A reader that keeps the world on-screen.</h2>
+            <p>Borrowed from the Glearning2 prototype: atmospheric backdrops, strong game motifs, and study controls that stay close to the dialogue.</p>
+          </div>
+          <div className="feature-grid">
+            {[
+              ['01', 'World-specific pages', 'Every game has its own route, palette set, chapter rail, and glossary mood.'],
+              ['02', 'Official-first study', 'Wuthering Waves keeps live Fandom + Kuro pairing, local MP3 preference, and export.'],
+              ['03', 'Prototype-ready expansion', 'Other games use curated sample lines now without pretending to be live connectors.'],
+            ].map(([num, title, body]) => (
+              <article className="feature-card" key={num} data-index={num}>
+                <span>{num}</span>
+                <h3>{title}</h3>
+                <p>{body}</p>
+              </article>
+            ))}
+          </div>
+        </section>
       </main>
     </>
+  )
+}
+
+function ReaderBackdrop({ game }: { game: Game }) {
+  return (
+    <div className={`reader-backdrop motif-${game.motif}`} aria-hidden="true">
+      <div className="backdrop-orb orb-a" />
+      <div className="backdrop-orb orb-b" />
+      <div className="backdrop-grid" />
+      <div className="backdrop-glyph">{game.glyph}</div>
+    </div>
+  )
+}
+
+function ReaderChrome({ game }: { game: Game }) {
+  return (
+    <div className={`reader-chrome chrome-${game.motif}`} aria-hidden="true">
+      <span className="chrome-corner tl" />
+      <span className="chrome-corner tr" />
+      <span className="chrome-corner bl" />
+      <span className="chrome-corner br" />
+      <span className="chrome-tag tl">{game.cn}</span>
+      <span className="chrome-tag tr">{game.studio}</span>
+      <span className="chrome-rule" />
+    </div>
+  )
+}
+
+function ReaderDock({
+  game,
+  quest,
+  stats,
+  isLive,
+  audioOnly,
+  setAudioOnly,
+  hideChinese,
+  setHideChinese,
+  onHome,
+}: {
+  game: Game
+  quest: QuestResponse | null
+  stats: { progress: number; audioVisible: number; unmatched: number; low: number; visible: number }
+  isLive: boolean
+  audioOnly: boolean
+  setAudioOnly: (value: boolean) => void
+  hideChinese: boolean
+  setHideChinese: (value: boolean) => void
+  onHome: () => void
+}) {
+  return (
+    <nav className="reader-dock" aria-label="Reader quick controls">
+      <button className="dock-btn ghost" type="button" onClick={onHome}>Library</button>
+      <div className="dock-meter" aria-label="Reading progress">
+        <span>{game.glyph}</span>
+        <i><b style={{ width: `${Math.round(stats.progress * 100)}%` }} /></i>
+        <small>{quest?.meta.pairedCount || 0}/{quest?.meta.enCount || 0} · {isLive ? 'live' : 'sample'}</small>
+      </div>
+      <button className={`dock-btn ${audioOnly ? 'is-on' : ''}`} type="button" onClick={() => setAudioOnly(!audioOnly)}>Audio only</button>
+      <button className={`dock-btn ${hideChinese ? 'is-on' : ''}`} type="button" onClick={() => setHideChinese(!hideChinese)}>Hide CN</button>
+      <span className="dock-stat">{stats.visible} visible · {stats.audioVisible} audio</span>
+    </nav>
   )
 }
 
