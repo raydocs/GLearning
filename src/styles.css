@@ -1321,6 +1321,277 @@ input::placeholder {
   background: color-mix(in srgb, var(--accent-2) 10%, transparent);
 }
 
+.home-page {
+  position: fixed;
+  top: var(--topbar-h);
+  right: 0;
+  bottom: 0;
+  left: 0;
+  overflow-y: auto;
+  padding: clamp(28px, 5vw, 72px);
+}
+
+.home-page::before {
+  position: fixed;
+  top: 82px;
+  right: 7vw;
+  width: 34vw;
+  max-width: 520px;
+  aspect-ratio: 1;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
+  border-radius: 34% 66% 42% 58%;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 16%, transparent), transparent),
+    radial-gradient(circle at 35% 35%, color-mix(in srgb, var(--accent-2) 18%, transparent), transparent 48%);
+  content: "";
+  filter: blur(0.2px);
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.home-hero {
+  position: relative;
+  z-index: 1;
+  max-width: 980px;
+  margin-bottom: 36px;
+  animation: rise-in 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+.home-kicker,
+.game-card-kicker {
+  color: var(--accent);
+  font: 800 10px/1 var(--mono);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+.home-hero h1 {
+  max-width: 900px;
+  margin: 14px 0 18px;
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: clamp(46px, 9vw, 116px);
+  font-weight: 700;
+  letter-spacing: -0.055em;
+  line-height: 0.9;
+}
+
+.home-hero p {
+  max-width: 660px;
+  margin: 0;
+  color: var(--muted);
+  font-size: clamp(16px, 1.7vw, 21px);
+  line-height: 1.55;
+}
+
+.home-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 28px;
+}
+
+.home-primary {
+  width: auto;
+  min-width: 280px;
+  padding: 0 22px;
+}
+
+.home-actions span {
+  color: var(--faint);
+  font: 700 11px/1.4 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.game-grid {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  padding-bottom: 48px;
+}
+
+.game-card {
+  min-height: 260px;
+  animation: rise-in 0.55s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+.game-card-link {
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  align-content: space-between;
+  width: 100%;
+  height: 100%;
+  min-height: 260px;
+  padding: 18px;
+  color: var(--ink);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background:
+    linear-gradient(160deg, color-mix(in srgb, var(--accent) 12%, transparent), transparent 42%),
+    color-mix(in srgb, var(--surface) 58%, transparent);
+  text-align: left;
+  backdrop-filter: blur(16px);
+  transition: 0.22s transform, 0.22s border-color, 0.22s background;
+}
+
+.game-card-link::after {
+  position: absolute;
+  right: -38px;
+  bottom: -46px;
+  color: color-mix(in srgb, var(--accent) 16%, transparent);
+  content: attr(data-glyph);
+  font-family: var(--serif);
+  font-size: 180px;
+  line-height: 1;
+}
+
+.game-card-link:hover {
+  border-color: color-mix(in srgb, var(--accent) 44%, transparent);
+  background:
+    linear-gradient(160deg, color-mix(in srgb, var(--accent) 20%, transparent), transparent 44%),
+    color-mix(in srgb, var(--surface) 76%, transparent);
+  transform: translateY(-5px);
+}
+
+.game-card-glyph {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+  font-family: var(--serif);
+  font-size: 25px;
+  font-weight: 800;
+}
+
+.game-card-body {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 8px;
+  margin-top: 38px;
+}
+
+.game-card-title {
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.02;
+}
+
+.game-card-cn,
+.game-card-meta,
+.sample-note {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.game-card-meta {
+  color: var(--faint);
+  font: 700 10px/1.35 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.game-card-progress {
+  overflow: hidden;
+  height: 3px;
+  border-radius: 99px;
+  background: var(--progress-track);
+}
+
+.game-card-progress i {
+  display: block;
+  height: 100%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+}
+
+.game-switch-list {
+  display: grid;
+  gap: 7px;
+}
+
+.game-switch {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px;
+  color: var(--muted);
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+}
+
+.game-switch:hover,
+.game-switch.active {
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.mini-glyph {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  border-radius: 9px;
+  font-family: var(--serif);
+  font-weight: 800;
+}
+
+.game-switch b,
+.game-switch small {
+  display: block;
+}
+
+.game-switch b {
+  overflow: hidden;
+  color: currentColor;
+  font-size: 12px;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.game-switch small {
+  margin-top: 2px;
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.sample-source-card {
+  margin-bottom: 12px;
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 @keyframes pulse {
   0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--due) 60%, transparent); }
   70% { box-shadow: 0 0 0 8px transparent; }
@@ -1331,6 +1602,10 @@ input::placeholder {
   :root {
     --col-left: 236px;
     --col-right: 292px;
+  }
+
+  .game-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .progress-strip {
@@ -1414,6 +1689,16 @@ input::placeholder {
   .reader-head {
     position: static;
   }
+
+  .home-page {
+    position: static;
+    padding: 28px 18px 60px;
+  }
+
+  .home-page::before {
+    width: 72vw;
+    opacity: 0.35;
+  }
 }
 
 @media (max-width: 640px) {
@@ -1453,5 +1738,23 @@ input::placeholder {
 
   .right-tab-row {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  .home-hero h1 {
+    letter-spacing: -0.04em;
+  }
+
+  .home-primary {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .game-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .game-card,
+  .game-card-link {
+    min-height: 220px;
   }
 }

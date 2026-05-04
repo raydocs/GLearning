@@ -1,19 +1,13 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
+import { GAMES } from './gameData'
 import type { MainQuestCatalogResponse, MainQuestOption, PairConfidence, QuestLine, QuestResponse } from './types'
 
 const DEFAULT_EN_URL = 'https://wutheringwaves.fandom.com/wiki/Utterance_of_Marvels:_I'
 const DEFAULT_ZH_URL =
   'https://wiki.biligame.com/wutheringwaves/%E4%BB%BB%E5%8A%A1%E5%9B%9E%E9%A1%BE/%E4%B8%87%E8%B1%A1%E6%96%B0%E5%A3%B0%C2%B7%E4%B8%8A'
-const THEME_STORAGE_KEY = 'wuwa-study-theme'
+const PALETTE_STORAGE_PREFIX = 'glearning-palette'
 const DENSITY_STORAGE_KEY = 'glearning-density'
-
-const THEMES = [
-  { id: 'tacet', name: 'Tacet Archive', note: '深绿档案' },
-  { id: 'jinzhou', name: 'Jinzhou Lantern', note: '今州暖金' },
-  { id: 'abyss', name: 'Abyss Current', note: '深海蓝' },
-  { id: 'battle', name: 'Battlefield Ember', note: '战场赤' },
-  { id: 'paper', name: 'Study Paper', note: '纸页护眼' },
-] as const
+const LIVE_GAME_ID = 'wuwa'
 
 const RIGHT_TABS = [
   { id: 'summary', label: 'Summary', note: 'Quest progress and source health.' },
@@ -28,17 +22,22 @@ const DENSITIES = [
   { id: 'spacious', label: '宽松' },
 ] as const
 
-type ThemeId = (typeof THEMES)[number]['id']
+type Game = (typeof GAMES)[number]
+type GameId = Game['id']
 type DensityId = (typeof DENSITIES)[number]['id']
 type RightTabId = (typeof RIGHT_TABS)[number]['id']
 
 function App() {
+  const [routeGameId, setRouteGameId] = useState<GameId | null>(() => getInitialRouteGameId())
+  const activeGame = useMemo(() => getGame(routeGameId || LIVE_GAME_ID), [routeGameId])
+  const isHome = routeGameId === null
+  const isLiveGame = activeGame.id === LIVE_GAME_ID
   const [enUrl, setEnUrl] = useState(DEFAULT_EN_URL)
   const [zhUrl, setZhUrl] = useState(DEFAULT_ZH_URL)
   const [questCatalog, setQuestCatalog] = useState<MainQuestOption[]>([])
   const [selectedQuestUrl, setSelectedQuestUrl] = useState(DEFAULT_EN_URL)
   const [catalogError, setCatalogError] = useState('')
-  const [theme, setTheme] = useState<ThemeId>(() => getInitialTheme())
+  const [paletteId, setPaletteId] = useState('')
   const [density, setDensity] = useState<DensityId>(() => getInitialDensity())
   const [sidePanel, setSidePanel] = useState<RightTabId>('summary')
   const [quest, setQuest] = useState<QuestResponse | null>(null)
@@ -48,6 +47,9 @@ function App() {
   const [speaker, setSpeaker] = useState('all')
   const [audioOnly, setAudioOnly] = useState(false)
   const [hideChinese, setHideChinese] = useState(false)
+
+  const activePalette = activeGame.palettes.find((palette) => palette.id === paletteId) || activeGame.palettes[0]
+  const readerData = useMemo(() => (isLiveGame ? quest : createSampleQuest(activeGame)), [activeGame, isLiveGame, quest])
 
   async function loadQuest(nextEnUrl = enUrl, nextZhUrl = zhUrl) {
     setIsLoading(true)
@@ -77,9 +79,20 @@ function App() {
   }
 
   useEffect(() => {
-    void loadQuest(DEFAULT_EN_URL, DEFAULT_ZH_URL)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    function handleRouteChange() {
+      setRouteGameId(getRouteGameId())
+    }
+
+    window.addEventListener('popstate', handleRouteChange)
+    return () => window.removeEventListener('popstate', handleRouteChange)
   }, [])
+
+  useEffect(() => {
+    if (isLiveGame && !quest && !isLoading) {
+      void loadQuest(DEFAULT_EN_URL, DEFAULT_ZH_URL)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLiveGame])
 
   useEffect(() => {
     async function loadCatalog() {
@@ -97,9 +110,29 @@ function App() {
   }, [])
 
   useEffect(() => {
-    document.documentElement.dataset.theme = theme
-    window.localStorage.setItem(THEME_STORAGE_KEY, theme)
-  }, [theme])
+    setPaletteId(getInitialPalette(activeGame))
+  }, [activeGame])
+
+  useEffect(() => {
+    const root = document.documentElement
+    root.dataset.game = activeGame.id
+    root.dataset.theme = activePalette.id
+    root.style.setProperty('--bg', activePalette.bg)
+    root.style.setProperty('--surface', activePalette.surface)
+    root.style.setProperty('--surface-2', activePalette.surface)
+    root.style.setProperty('--ink', activePalette.ink)
+    root.style.setProperty('--muted', activePalette.muted)
+    root.style.setProperty('--faint', activePalette.muted)
+    root.style.setProperty('--accent', activePalette.accent)
+    root.style.setProperty('--accent-2', activePalette.accent2)
+    root.style.setProperty('--progress', activePalette.accent)
+    root.style.setProperty('--due', activePalette.accent2)
+    root.style.setProperty('--spine-heard', activePalette.accent2)
+    root.style.setProperty('--spine-mastered', activePalette.accent)
+    root.style.setProperty('--serif', activeGame.serif)
+    root.style.setProperty('--sans', activeGame.sans)
+    window.localStorage.setItem(getPaletteStorageKey(activeGame.id), activePalette.id)
+  }, [activeGame, activePalette])
 
   useEffect(() => {
     document.documentElement.dataset.density = density
@@ -120,21 +153,21 @@ function App() {
   }
 
   const speakers = useMemo(() => {
-    if (!quest) return []
+    if (!readerData) return []
     const labels = new Set<string>()
-    quest.lines.forEach((line) => {
+    readerData.lines.forEach((line) => {
       if (line.speakerEn || line.speakerZh) {
         labels.add(`${line.speakerEn || 'Unmatched'} / ${line.speakerZh || '未匹配'}`)
       }
     })
     return [...labels]
-  }, [quest])
+  }, [readerData])
 
   const filteredLines = useMemo(() => {
-    if (!quest) return []
+    if (!readerData) return []
     const normalizedSearch = search.trim().toLowerCase()
 
-    return quest.lines.filter((line) => {
+    return readerData.lines.filter((line) => {
       if (audioOnly && !line.audioUrl) return false
       if (speaker !== 'all' && `${line.speakerEn || 'Unmatched'} / ${line.speakerZh || '未匹配'}` !== speaker) {
         return false
@@ -146,27 +179,27 @@ function App() {
         .toLowerCase()
         .includes(normalizedSearch)
     })
-  }, [audioOnly, quest, search, speaker])
+  }, [audioOnly, readerData, search, speaker])
 
   const stats = useMemo(() => {
-    if (!quest) {
+    if (!readerData) {
       return { progress: 0, audioVisible: 0, unmatched: 0, low: 0, visible: 0 }
     }
 
     return {
-      progress: quest.meta.enCount ? quest.meta.pairedCount / quest.meta.enCount : 0,
+      progress: readerData.meta.enCount ? readerData.meta.pairedCount / readerData.meta.enCount : 0,
       audioVisible: filteredLines.filter((line) => line.audioUrl).length,
-      unmatched: quest.lines.filter((line) => line.confidence === 'unmatched').length,
-      low: quest.lines.filter((line) => line.confidence === 'low').length,
+      unmatched: readerData.lines.filter((line) => line.confidence === 'unmatched').length,
+      low: readerData.lines.filter((line) => line.confidence === 'low').length,
       visible: filteredLines.length,
     }
-  }, [filteredLines, quest])
+  }, [filteredLines, readerData])
 
   const activeTab = RIGHT_TABS.find((tab) => tab.id === sidePanel) || RIGHT_TABS[0]
 
   function exportTsv() {
-    if (!quest) return
-    const rows = quest.lines.map((line) =>
+    if (!readerData) return
+    const rows = readerData.lines.map((line) =>
       [line.speakerEn, line.en, line.speakerZh, line.zh, line.audioSourceUrl || line.audioUrl || '', line.confidence]
         .map(escapeTsv)
         .join('\t'),
@@ -175,9 +208,23 @@ function App() {
     const blob = new Blob([[header, ...rows].join('\n')], { type: 'text/tab-separated-values;charset=utf-8' })
     const link = document.createElement('a')
     link.href = URL.createObjectURL(blob)
-    link.download = `${quest.meta.enTitle.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-bilingual.tsv`
+    link.download = `${readerData.meta.enTitle.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-bilingual.tsv`
     link.click()
     URL.revokeObjectURL(link.href)
+  }
+
+  function navigateToGame(gameId: GameId | null) {
+    const nextPath = gameId ? `/games/${gameId}` : '/'
+    window.history.pushState({}, '', nextPath)
+    setRouteGameId(gameId)
+    setSearch('')
+    setSpeaker('all')
+    setAudioOnly(false)
+    setHideChinese(false)
+  }
+
+  if (isHome) {
+    return <HomePage games={GAMES} onOpenGame={navigateToGame} />
   }
 
   return (
@@ -186,24 +233,27 @@ function App() {
         <div className="brand">
           <div className="brand-mark">G</div>
           <div className="brand-text">
-            <div className="brand-name">GLearning · 鸣潮</div>
-            <div className="brand-sub">Kuro Games · 学英语 · v6 UI</div>
+            <div className="brand-name">GLearning · {activeGame.name}</div>
+            <div className="brand-sub">{activeGame.studio} · {activeGame.cn} · game English</div>
           </div>
         </div>
 
-        <div className="progress-strip" title={quest ? `${quest.meta.enTitle} · ${quest.meta.zhTitle}` : 'Loading quest'}>
-          <span className="strip-title">{quest?.meta.enTitle || 'Loading quest archive'}</span>
-          <span className="strip-cn">{quest?.meta.zhTitle || '正在同步源站'}</span>
+        <div className="progress-strip" title={readerData ? `${readerData.meta.enTitle} · ${readerData.meta.zhTitle}` : 'Loading quest'}>
+          <span className="strip-title">{readerData?.meta.enTitle || 'Loading quest archive'}</span>
+          <span className="strip-cn">{readerData?.meta.zhTitle || '正在同步源站'}</span>
           <span className="strip-track" aria-hidden="true">
             <i style={{ width: `${Math.round(stats.progress * 100)}%` }} />
           </span>
           <span className="strip-counter">
-            <b>{quest?.meta.pairedCount || 0}</b> / {quest?.meta.enCount || 0} paired
+            <b>{readerData?.meta.pairedCount || 0}</b> / {readerData?.meta.enCount || 0} paired
           </span>
         </div>
 
         <div className="top-actions">
-          <button className="icon-btn" type="button" data-hint="Load current URLs" onClick={() => void loadQuest()} disabled={isLoading}>
+          <button className="icon-btn" type="button" data-hint="Game library" onClick={() => navigateToGame(null)}>
+            ⌂
+          </button>
+          <button className="icon-btn" type="button" data-hint={isLiveGame ? 'Load current URLs' : 'Sample reader'} onClick={() => void loadQuest()} disabled={!isLiveGame || isLoading}>
             {isLoading ? '…' : '↻'}
           </button>
           <button
@@ -229,30 +279,56 @@ function App() {
 
       <main className="shell">
         <aside className="rail left-rail">
-          <form className="source-panel" onSubmit={handleSubmit}>
-            <h4>Sources <span className="pill">live</span></h4>
-            <label className="field">
-              <span>Main quest</span>
-              <select value={selectedQuestUrl} onChange={(event) => handleQuestSelect(event.target.value)}>
-                <option value="" disabled>
-                  {questCatalog.length ? 'Choose a main quest...' : 'Loading main quests...'}
-                </option>
-                {groupQuestsByChapter(questCatalog).map(([chapter, options]) => (
-                  <optgroup key={chapter} label={chapter}>
-                    {options.map((option) => (
-                      <option key={option.enUrl} value={option.enUrl}>
-                        {option.act}: {option.title}
-                      </option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
-              <em>{catalogError || `${questCatalog.length || 'All'} Fandom quests · Kuro auto match`}</em>
-            </label>
-            <button className="primary-btn" type="submit" disabled={isLoading}>
-              {isLoading ? 'Syncing…' : 'Build reader'}
-            </button>
-          </form>
+          <section className="source-panel game-switcher">
+            <h4>Games <span className="pill">{GAMES.length}</span></h4>
+            <div className="game-switch-list">
+              {GAMES.map((game) => (
+                <button
+                  key={game.id}
+                  className={`game-switch ${game.id === activeGame.id ? 'active' : ''}`}
+                  type="button"
+                  onClick={() => navigateToGame(game.id)}
+                >
+                  <span className="mini-glyph">{game.glyph}</span>
+                  <span><b>{game.name}</b><small>{game.cn}</small></span>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          {isLiveGame ? (
+            <form className="source-panel" onSubmit={handleSubmit}>
+              <h4>Sources <span className="pill">live</span></h4>
+              <label className="field">
+                <span>Main quest</span>
+                <select value={selectedQuestUrl} onChange={(event) => handleQuestSelect(event.target.value)}>
+                  <option value="" disabled>
+                    {questCatalog.length ? 'Choose a main quest...' : 'Loading main quests...'}
+                  </option>
+                  {groupQuestsByChapter(questCatalog).map(([chapter, options]) => (
+                    <optgroup key={chapter} label={chapter}>
+                      {options.map((option) => (
+                        <option key={option.enUrl} value={option.enUrl}>
+                          {option.act}: {option.title}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+                <em>{catalogError || `${questCatalog.length || 'All'} Fandom quests · Kuro auto match`}</em>
+              </label>
+              <button className="primary-btn" type="submit" disabled={isLoading}>
+                {isLoading ? 'Syncing…' : 'Build reader'}
+              </button>
+            </form>
+          ) : (
+            <section className="source-panel">
+              <h4>Sources <span className="pill">sample</span></h4>
+              <p className="sample-note">
+                This game page is using curated prototype dialogue and glossary data while a live source connector is added.
+              </p>
+            </section>
+          )}
 
           <section className="rail-section">
             <h4>Reader density</h4>
@@ -273,49 +349,59 @@ function App() {
           </section>
 
           <section className="rail-section">
-            <h4>Theme</h4>
+            <h4>Theme <span className="pill">{activeGame.cn}</span></h4>
             <div className="theme-grid" aria-label="Reader themes">
-              {THEMES.map((option) => (
+              {activeGame.palettes.map((option) => (
                 <button
                   key={option.id}
-                  className={`theme-card ${theme === option.id ? 'is-on' : ''}`}
+                  className={`theme-card ${activePalette.id === option.id ? 'is-on' : ''}`}
                   type="button"
-                  aria-pressed={theme === option.id}
-                  onClick={() => setTheme(option.id)}
+                  aria-pressed={activePalette.id === option.id}
+                  onClick={() => setPaletteId(option.id)}
                 >
                   <span>{option.name}</span>
-                  <small>{option.note}</small>
+                  <small>{option.cn}</small>
                 </button>
               ))}
             </div>
           </section>
 
           <section className="rail-section quest-index">
-            <h4>Quest index <span className="pill">{questCatalog.length || '—'}</span></h4>
+            <h4>Quest index <span className="pill">{isLiveGame ? questCatalog.length || '—' : activeGame.chapters.length}</span></h4>
             <div className="chapter-list">
-              {questCatalog.slice(0, 18).map((option) => (
-                <button
-                  key={option.enUrl}
-                  className={`chapter-card ${selectedQuestUrl === option.enUrl ? 'active' : ''}`}
-                  type="button"
-                  onClick={() => handleQuestSelect(option.enUrl)}
-                >
-                  <span className="chap-name">{option.title}</span>
-                  <span className="chap-cn">{option.chapter} · {option.act}</span>
-                </button>
-              ))}
+              {isLiveGame
+                ? questCatalog.slice(0, 18).map((option) => (
+                    <button
+                      key={option.enUrl}
+                      className={`chapter-card ${selectedQuestUrl === option.enUrl ? 'active' : ''}`}
+                      type="button"
+                      onClick={() => handleQuestSelect(option.enUrl)}
+                    >
+                      <span className="chap-name">{option.title}</span>
+                      <span className="chap-cn">{option.chapter} · {option.act}</span>
+                    </button>
+                  ))
+                : activeGame.chapters.map((chapter, index) => (
+                    <button key={chapter.id} className={`chapter-card ${index === 0 ? 'active' : ''}`} type="button">
+                      <span className="chap-name">{chapter.name}</span>
+                      <span className="chap-cn">{chapter.cn} · {Math.round(chapter.progress * 100)}% prototype</span>
+                    </button>
+                  ))}
             </div>
           </section>
 
           <div className="rail-footnote">
-            <b>真实数据源</b><br />English from Fandom MediaWiki · Chinese auto pairs from Kuro Wiki · MP3 preferred when bundled.
+            <b>{isLiveGame ? '真实数据源' : 'Prototype page'}</b><br />
+            {isLiveGame
+              ? 'English from Fandom MediaWiki · Chinese auto pairs from Kuro Wiki · MP3 preferred when bundled.'
+              : `${activeGame.name} is theme-complete with sample study content; live API integration can be added next.`}
           </div>
         </aside>
 
         <section className="reader" aria-label="Bilingual dialogue reader">
           <div className="reader-inner">
             {error && <div className="error-banner">{error}</div>}
-            {quest?.warnings?.map((warning) => (
+            {readerData?.warnings?.map((warning) => (
               <div className="warning-banner" key={warning}>
                 {warning}
               </div>
@@ -329,23 +415,23 @@ function App() {
                   <path d="M160 34v252M34 160h252M72 72l176 176M248 72 72 248" />
                 </svg>
               </div>
-              <div className="reader-eyebrow"><span className="dot" />Quest dialogue · 鸣潮</div>
-              <h1 className="reader-title">{quest?.meta.enTitle || 'Fandom English audio, Kuro Chinese text'}</h1>
-              <span className="reader-cn">{quest?.meta.zhTitle || '选择章节后自动同步中英文台词'}</span>
+              <div className="reader-eyebrow"><span className="dot" />{isLiveGame ? 'Live quest dialogue' : 'Prototype reader'} · {activeGame.cn}</div>
+              <h1 className="reader-title">{readerData?.meta.enTitle || `${activeGame.name} reader`}</h1>
+              <span className="reader-cn">{readerData?.meta.zhTitle || activeGame.cnTagline}</span>
               <div className="reader-progress-tiny">
                 <div className="bar" aria-hidden="true"><i style={{ width: `${Math.round(stats.progress * 100)}%` }} /></div>
-                <span><b>{quest?.meta.pairedCount || 0}</b> paired · {stats.audioVisible} audio visible · {stats.unmatched} unmatched</span>
+                <span><b>{readerData?.meta.pairedCount || 0}</b> paired · {stats.audioVisible} audio visible · {stats.unmatched} unmatched</span>
               </div>
             </header>
 
-            {quest && (
+            {readerData && (
               <>
                 <section className="quest-context">
-                  <div className="label">Quest context · live parse</div>
+                  <div className="label">Quest context · {isLiveGame ? 'live parse' : 'sample set'}</div>
                   <p>
-                    <b>Source:</b> {shortUrl(quest.source.enUrl)}<br />
-                    <b>Chinese:</b> {shortUrl(quest.source.zhUrl)}<br />
-                    <b>Focus:</b> review official lines after playing; no AI translation is used.
+                    <b>Source:</b> {isLiveGame ? shortUrl(readerData.source.enUrl) : activeGame.studio}<br />
+                    <b>Chinese:</b> {isLiveGame ? shortUrl(readerData.source.zhUrl) : activeGame.cn}<br />
+                    <b>Focus:</b> {isLiveGame ? 'review official lines after playing; no AI translation is used.' : 'practice with theme-matched sample lines until a live connector exists.'}
                   </p>
                 </section>
 
@@ -365,7 +451,7 @@ function App() {
                   </label>
                 </section>
 
-                <div className="stream" role="list" aria-label={`${quest.meta.enTitle} dialogue`}>
+                <div className="stream" role="list" aria-label={`${readerData.meta.enTitle} dialogue`}>
                   {filteredLines.map((line) => (
                     <DialogueCard key={line.id} line={line} hideChinese={hideChinese} />
                   ))}
@@ -394,17 +480,17 @@ function App() {
             <div className="right-tab-note">{activeTab.note}</div>
           </div>
 
-          {quest && sidePanel === 'summary' && <SummaryPanel quest={quest} stats={stats} />}
-          {quest && sidePanel === 'study' && (
+          {readerData && sidePanel === 'summary' && <SummaryPanel quest={readerData} stats={stats} game={activeGame} isLive={isLiveGame} />}
+          {readerData && sidePanel === 'study' && (
             <StudyPanel
-              quest={quest}
+              quest={readerData}
               audioOnly={audioOnly}
               setAudioOnly={setAudioOnly}
               hideChinese={hideChinese}
               setHideChinese={setHideChinese}
             />
           )}
-          {sidePanel === 'sources' && (
+          {sidePanel === 'sources' && isLiveGame && (
             <SourcesPanel
               enUrl={enUrl}
               zhUrl={zhUrl}
@@ -414,18 +500,91 @@ function App() {
               isLoading={isLoading}
             />
           )}
-          {quest && sidePanel === 'export' && <ExportPanel quest={quest} exportTsv={exportTsv} />}
+          {sidePanel === 'sources' && !isLiveGame && <SampleSourcesPanel game={activeGame} />}
+          {readerData && sidePanel === 'export' && <ExportPanel quest={readerData} exportTsv={exportTsv} isLive={isLiveGame} />}
         </aside>
       </main>
     </>
   )
 }
 
-function SummaryPanel({ quest, stats }: { quest: QuestResponse; stats: { audioVisible: number; unmatched: number; low: number; visible: number } }) {
+function HomePage({ games, onOpenGame }: { games: readonly Game[]; onOpenGame: (gameId: GameId) => void }) {
+  const liveGame = getGame(LIVE_GAME_ID)
+
+  return (
+    <>
+      <header className="topbar home-topbar">
+        <div className="brand">
+          <div className="brand-mark">G</div>
+          <div className="brand-text">
+            <div className="brand-name">GLearning</div>
+            <div className="brand-sub">game dialogue · bilingual study</div>
+          </div>
+        </div>
+        <div className="progress-strip home-strip">
+          <span className="strip-title">Choose a world, keep the English in context</span>
+          <span className="strip-cn">每个游戏一套阅读器主题</span>
+        </div>
+        <div className="top-actions">
+          <button className="icon-btn is-on" type="button" data-hint="Live Wuthering Waves" onClick={() => onOpenGame(liveGame.id)}>
+            W
+          </button>
+        </div>
+      </header>
+
+      <main className="home-page">
+        <section className="home-hero">
+          <div className="home-kicker">GLearning library</div>
+          <h1>Learn English through the games you already care about.</h1>
+          <p>
+            A themed bilingual reader for each world: live quest dialogue for Wuthering Waves today, and prototype study rooms ready for the next game connectors.
+          </p>
+          <div className="home-actions">
+            <button className="primary-btn home-primary" type="button" onClick={() => onOpenGame(liveGame.id)}>
+              Open live Wuthering Waves reader
+            </button>
+            <span>{games.length} game pages · per-game palettes · exportable lines</span>
+          </div>
+        </section>
+
+        <section className="game-grid" aria-label="Game pages">
+          {games.map((game, index) => (
+            <article className="game-card" key={game.id} style={{ animationDelay: `${index * 55}ms` }}>
+              <button className="game-card-link" type="button" data-glyph={game.glyph} onClick={() => onOpenGame(game.id)}>
+                <span className="game-card-glyph">{game.glyph}</span>
+                <span className="game-card-body">
+                  <span className="game-card-kicker">{game.studio}</span>
+                  <span className="game-card-title">{game.name}</span>
+                  <span className="game-card-cn">{game.cn} · {game.cnTagline}</span>
+                  <span className="game-card-progress">
+                    <i style={{ width: `${Math.round(game.chapters[0].progress * 100)}%` }} />
+                  </span>
+                  <span className="game-card-meta">{game.chapters.length} chapters · {game.glossary.length} terms · {game.id === LIVE_GAME_ID ? 'live API' : 'sample'}</span>
+                </span>
+              </button>
+            </article>
+          ))}
+        </section>
+      </main>
+    </>
+  )
+}
+
+function SummaryPanel({
+  quest,
+  stats,
+  game,
+  isLive,
+}: {
+  quest: QuestResponse
+  stats: { audioVisible: number; unmatched: number; low: number; visible: number }
+  game: Game
+  isLive: boolean
+}) {
   return (
     <>
       <section className="panel today-panel">
-        <h4>Today · 当前任务 <span className="pill">live</span></h4>
+        <h4>Today · 当前任务 <span className="pill">{isLive ? 'live' : 'sample'}</span></h4>
         <div className="today-score">
           <div className="today-main"><small>Paired lines</small>{quest.meta.pairedCount}/{quest.meta.enCount}</div>
           <div className="streak-badge">♪ {quest.meta.audioCount} audio</div>
@@ -439,12 +598,12 @@ function SummaryPanel({ quest, stats }: { quest: QuestResponse; stats: { audioVi
       </section>
 
       <section className="panel game-dossier">
-        <h4>World · 游戏世界 <span className="pill">Kuro</span></h4>
+        <h4>World · 游戏世界 <span className="pill">{game.studio}</span></h4>
         <div className="game-hero-row">
-          <div className="game-glyph">W</div>
+          <div className="game-glyph">{game.glyph}</div>
           <div>
-            <div className="game-title">Wuthering Waves</div>
-            <div className="game-cn">鸣潮 · resonance archive for language review</div>
+            <div className="game-title">{game.name}</div>
+            <div className="game-cn">{game.cn} · {game.tagline}</div>
           </div>
         </div>
         <div className="palette-row" aria-hidden="true">
@@ -456,7 +615,7 @@ function SummaryPanel({ quest, stats }: { quest: QuestResponse; stats: { audioVi
         <div className="game-meta-grid">
           <div className="game-meta"><b>{quest.meta.zhCount}</b><span>Chinese</span></div>
           <div className="game-meta"><b>{quest.terms.length}</b><span>terms</span></div>
-          <div className="game-meta"><b>v6</b><span>UI shell</span></div>
+          <div className="game-meta"><b>{isLive ? 'live' : 'mock'}</b><span>source</span></div>
         </div>
       </section>
     </>
@@ -540,28 +699,97 @@ function SourcesPanel({
   )
 }
 
-function ExportPanel({ quest, exportTsv }: { quest: QuestResponse; exportTsv: () => void }) {
+function SampleSourcesPanel({ game }: { game: Game }) {
+  return (
+    <section className="panel source-editor">
+      <h4>Sample source status</h4>
+      <div className="share-preview sample-source-card" aria-hidden="true">
+        <div className="sp-kicker">{game.studio}</div>
+        <div className="sp-title">{game.name}</div>
+        <div className="sp-row"><span>{game.cn}</span><span>{game.sample.length} lines</span></div>
+      </div>
+      <p className="sample-note">
+        This page already has its own route, palettes, chapter rail, glossary, and export flow. The live dialogue connector is intentionally not stubbed as real data.
+      </p>
+    </section>
+  )
+}
+
+function ExportPanel({ quest, exportTsv, isLive }: { quest: QuestResponse; exportTsv: () => void; isLive: boolean }) {
   return (
     <section className="panel share-card">
       <h4>Export · 分享</h4>
       <div className="share-preview" aria-hidden="true">
-        <div className="sp-kicker">GLearning · 鸣潮</div>
+        <div className="sp-kicker">GLearning · {isLive ? 'live' : 'sample'}</div>
         <div className="sp-title">{quest.meta.pairedCount} paired dialogue lines</div>
         <div className="sp-row"><span>{quest.meta.enTitle}</span><span>{quest.meta.audioCount} clips</span></div>
       </div>
       <div className="share-row">
         <button className="mini-btn primary" type="button" onClick={exportTsv}>Export TSV</button>
-        <a className="mini-btn" href={quest.source.enUrl} target="_blank" rel="noreferrer">Fandom</a>
-        <a className="mini-btn" href={quest.source.zhUrl} target="_blank" rel="noreferrer">Chinese</a>
+        {isLive && <a className="mini-btn" href={quest.source.enUrl} target="_blank" rel="noreferrer">Fandom</a>}
+        {isLive && <a className="mini-btn" href={quest.source.zhUrl} target="_blank" rel="noreferrer">Chinese</a>}
       </div>
     </section>
   )
 }
 
-function getInitialTheme(): ThemeId {
-  if (typeof window === 'undefined') return 'tacet'
-  const savedTheme = window.localStorage.getItem(THEME_STORAGE_KEY)
-  return THEMES.some((theme) => theme.id === savedTheme) ? (savedTheme as ThemeId) : 'tacet'
+function getGame(gameId: string) {
+  return GAMES.find((game) => game.id === gameId) || GAMES[0]
+}
+
+function getInitialRouteGameId(): GameId | null {
+  if (typeof window === 'undefined') return LIVE_GAME_ID
+  return getRouteGameId()
+}
+
+function getRouteGameId(): GameId | null {
+  const pathMatch = window.location.pathname.match(/^\/games\/([^/?#]+)/)
+  const hashMatch = window.location.hash.match(/^#\/?games\/([^/?#]+)/)
+  const candidate = pathMatch?.[1] || hashMatch?.[1]
+  if (!candidate) return null
+  return GAMES.some((game) => game.id === candidate) ? (candidate as GameId) : null
+}
+
+function getInitialPalette(game: Game) {
+  if (typeof window === 'undefined') return game.palettes[0].id
+  const savedPalette = window.localStorage.getItem(getPaletteStorageKey(game.id))
+  return game.palettes.some((palette) => palette.id === savedPalette) ? savedPalette || game.palettes[0].id : game.palettes[0].id
+}
+
+function getPaletteStorageKey(gameId: string) {
+  return `${PALETTE_STORAGE_PREFIX}-${gameId}`
+}
+
+function createSampleQuest(game: Game): QuestResponse {
+  const chapter = game.chapters[0]
+  const lines: QuestLine[] = game.sample.map((line) => ({
+    id: String(line.id),
+    type: 'dialogue',
+    speakerEn: line.speaker,
+    speakerZh: line.cn,
+    en: line.en,
+    zh: line.zh,
+    confidence: line.confidence as PairConfidence,
+  }))
+
+  return {
+    meta: {
+      enTitle: chapter.name,
+      zhTitle: chapter.cn,
+      fetchedAt: new Date(0).toISOString(),
+      enCount: lines.length,
+      zhCount: lines.length,
+      pairedCount: lines.length,
+      audioCount: 0,
+    },
+    source: {
+      enUrl: `sample://${game.id}/en`,
+      zhUrl: `sample://${game.id}/zh`,
+    },
+    terms: game.glossary.map((term) => ({ en: term.en, zh: term.cn })),
+    warnings: ['Prototype sample content: not a live game wiki/API parse yet.'],
+    lines,
+  }
 }
 
 function getInitialDensity(): DensityId {
