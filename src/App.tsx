@@ -7,6 +7,15 @@ const DEFAULT_ZH_URL =
   'https://wiki.biligame.com/wutheringwaves/%E4%BB%BB%E5%8A%A1%E5%9B%9E%E9%A1%BE/%E4%B8%87%E8%B1%A1%E6%96%B0%E5%A3%B0%C2%B7%E4%B8%8A'
 const PALETTE_STORAGE_PREFIX = 'glearning-palette'
 const DENSITY_STORAGE_KEY = 'glearning-density'
+const STUDY_STORAGE_VERSION = 1
+const STUDY_STORAGE_PREFIX = `glearning-study-v${STUDY_STORAGE_VERSION}`
+const SAVES_STORAGE_KEY = 'glearning-saves-v1'
+const SAVES_STORAGE_VERSION = 1
+const REVIEW_STORAGE_KEY = 'glearning-review-v1'
+const REVIEW_STORAGE_VERSION = 1
+const REVIEW_AGAIN_MINUTES = 10
+const REVIEW_FIRST_KNOW_MINUTES = 60 * 24
+const REVIEW_MAX_KNOW_MINUTES = 60 * 24 * 30
 const LIVE_GAME_ID = 'wuwa'
 
 const RIGHT_TABS = [
@@ -26,6 +35,98 @@ type Game = (typeof GAMES)[number]
 type GameId = Game['id']
 type DensityId = (typeof DENSITIES)[number]['id']
 type RightTabId = (typeof RIGHT_TABS)[number]['id']
+type LineStudyStatus = 'unread' | 'heard' | 'mastered'
+
+type LineStudyState = {
+  revealedAt?: string
+  firstPlayedAt?: string
+  lastPlayedAt?: string
+  playCount?: number
+  masteredAt?: string
+}
+
+type StoredQuestStudyState = {
+  version: typeof STUDY_STORAGE_VERSION
+  gameId: string
+  questKey: string
+  updatedAt: string
+  lines: Record<string, LineStudyState>
+}
+
+type SavedLineItem = {
+  type: 'line'
+  id: string
+  gameId: string
+  questKey: string
+  lineKey: string
+  lineId: string
+  speakerEn: string
+  speakerZh: string
+  en: string
+  zh: string
+  savedAt: string
+  updatedAt: string
+}
+
+type SavedTermItem = {
+  type: 'term'
+  id: string
+  gameId: string
+  questKey: string
+  en: string
+  zh: string
+  savedAt: string
+  updatedAt: string
+}
+
+type SavedItem = SavedLineItem | SavedTermItem
+
+type StoredSavedItems = {
+  version: typeof SAVES_STORAGE_VERSION
+  updatedAt: string
+  items: Record<string, SavedItem>
+}
+
+type ReviewGrade = 'again' | 'know'
+
+type ReviewItemState = {
+  dueAt: string
+  intervalMinutes: number
+  reviewedAt?: string
+  lastGrade?: ReviewGrade
+}
+
+type StoredReviewItems = {
+  version: typeof REVIEW_STORAGE_VERSION
+  updatedAt: string
+  items: Record<string, ReviewItemState>
+}
+
+type GlossaryTerm = QuestResponse['terms'][number]
+
+type LanguageHelp = {
+  line: QuestLine
+  terms: GlossaryTerm[]
+  hints: string[]
+}
+
+type QuestStudyIdentity = {
+  questKey: string
+  storageKey: string
+}
+
+type ReaderStats = {
+  progress: number
+  audioVisible: number
+  unmatched: number
+  low: number
+  visible: number
+  total: number
+  played: number
+  revealed: number
+  mastered: number
+  studyProgress: number
+}
 
 function App() {
   const [routeGameId, setRouteGameId] = useState<GameId | null>(() => getInitialRouteGameId())
@@ -40,6 +141,7 @@ function App() {
   const [paletteId, setPaletteId] = useState('')
   const [density, setDensity] = useState<DensityId>(() => getInitialDensity())
   const [sidePanel, setSidePanel] = useState<RightTabId>('summary')
+  const [selectedHelpLineId, setSelectedHelpLineId] = useState('')
   const [quest, setQuest] = useState<QuestResponse | null>(null)
   const [error, setError] = useState('')
   const [isLoading, setIsLoading] = useState(false)
@@ -47,9 +149,42 @@ function App() {
   const [speaker, setSpeaker] = useState('all')
   const [audioOnly, setAudioOnly] = useState(false)
   const [hideChinese, setHideChinese] = useState(false)
+  const [lineStudyByKey, setLineStudyByKey] = useState<Record<string, LineStudyState>>({})
+  const [loadedStudyStorageKey, setLoadedStudyStorageKey] = useState('')
+  const [savedItemsById, setSavedItemsById] = useState<Record<string, SavedItem>>(() => readStoredSaves()?.items || {})
+  const [reviewItemsById, setReviewItemsById] = useState<Record<string, ReviewItemState>>(() => readStoredReviewItems()?.items || {})
+  const [reviewNowMs, setReviewNowMs] = useState(() => Date.now())
 
   const activePalette = activeGame.palettes.find((palette) => palette.id === paletteId) || activeGame.palettes[0]
   const readerData = useMemo(() => (isLiveGame ? quest : createSampleQuest(activeGame)), [activeGame, isLiveGame, quest])
+  const hasQuestAudio = Boolean(readerData?.meta.audioCount)
+  const audioAvailabilityLabel = hasQuestAudio ? `${readerData?.meta.audioCount || 0} playable clips` : 'No playable clips yet'
+  const audioAvailabilityHint = hasQuestAudio ? `Audio only · ${audioAvailabilityLabel}` : 'Audio-only unavailable · this sample has no playable clips yet.'
+  const questStudyIdentity = useMemo(() => (readerData ? getQuestStudyIdentity(activeGame.id, readerData) : null), [activeGame.id, readerData])
+  const lineStudyKeys = useMemo(() => (readerData ? buildLineStudyKeys(readerData.lines) : {}), [readerData])
+  const activeQuestSavedItems = useMemo(
+    () =>
+      questStudyIdentity
+        ? Object.values(savedItemsById)
+            .filter((item) => item.gameId === activeGame.id && item.questKey === questStudyIdentity.questKey)
+            .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+        : [],
+    [activeGame.id, questStudyIdentity, savedItemsById],
+  )
+  const activeGameSavedCount = useMemo(
+    () => Object.values(savedItemsById).filter((item) => item.gameId === activeGame.id).length,
+    [activeGame.id, savedItemsById],
+  )
+  const activeGameDueReviewCount = useMemo(
+    () => countDueReviewItems(Object.values(savedItemsById).filter((item) => item.gameId === activeGame.id), reviewItemsById, reviewNowMs),
+    [activeGame.id, reviewItemsById, reviewNowMs, savedItemsById],
+  )
+  const activeQuestDueReviewItems = useMemo(
+    () => getDueReviewItems(activeQuestSavedItems, reviewItemsById, reviewNowMs),
+    [activeQuestSavedItems, reviewItemsById, reviewNowMs],
+  )
+  const savedTermIds = useMemo(() => new Set(activeQuestSavedItems.filter((item) => item.type === 'term').map((item) => item.id)), [activeQuestSavedItems])
+  const selectedLanguageHelp = useMemo(() => (readerData ? buildLanguageHelp(readerData, selectedHelpLineId) : null), [readerData, selectedHelpLineId])
 
   async function loadQuest(nextEnUrl = enUrl, nextZhUrl = zhUrl) {
     setIsLoading(true)
@@ -140,6 +275,149 @@ function App() {
     window.localStorage.setItem(DENSITY_STORAGE_KEY, density)
   }, [density])
 
+  useEffect(() => {
+    setLoadedStudyStorageKey('')
+
+    if (!questStudyIdentity) {
+      setLineStudyByKey({})
+      return
+    }
+
+    setLineStudyByKey(readStoredStudyState(questStudyIdentity.storageKey)?.lines || {})
+    setLoadedStudyStorageKey(questStudyIdentity.storageKey)
+  }, [questStudyIdentity])
+
+  useEffect(() => {
+    if (!questStudyIdentity || loadedStudyStorageKey !== questStudyIdentity.storageKey) return
+    writeStoredStudyState(questStudyIdentity.storageKey, activeGame.id, questStudyIdentity.questKey, lineStudyByKey)
+  }, [activeGame.id, lineStudyByKey, loadedStudyStorageKey, questStudyIdentity])
+
+  useEffect(() => {
+    writeStoredSaves(savedItemsById)
+  }, [savedItemsById])
+
+  useEffect(() => {
+    writeStoredReviewItems(reviewItemsById)
+  }, [reviewItemsById])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setReviewNowMs(Date.now()), 60 * 1000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
+    setReviewItemsById((current) => {
+      const savedIds = new Set(Object.keys(savedItemsById))
+      const next = Object.fromEntries(Object.entries(current).filter(([id]) => savedIds.has(id)))
+      return Object.keys(next).length === Object.keys(current).length ? current : next
+    })
+  }, [savedItemsById])
+
+  useEffect(() => {
+    setSelectedHelpLineId('')
+  }, [activeGame.id, questStudyIdentity?.questKey])
+
+  useEffect(() => {
+    if (!selectedHelpLineId || !readerData) return
+    if (!readerData.lines.some((line) => line.id === selectedHelpLineId)) {
+      setSelectedHelpLineId('')
+    }
+  }, [readerData, selectedHelpLineId])
+
+  useEffect(() => {
+    if (readerData && audioOnly && !hasQuestAudio) {
+      setAudioOnly(false)
+    }
+  }, [audioOnly, hasQuestAudio, readerData])
+
+  function updateLineStudy(lineKey: string | undefined, updater: (current: LineStudyState, now: string) => LineStudyState) {
+    if (!lineKey) return
+    setLineStudyByKey((current) => ({
+      ...current,
+      [lineKey]: updater(current[lineKey] || {}, new Date().toISOString()),
+    }))
+  }
+
+  function markLineRevealed(lineKey: string | undefined) {
+    updateLineStudy(lineKey, (current, now) => ({ ...current, revealedAt: current.revealedAt || now }))
+  }
+
+  function markLinePlayed(lineKey: string | undefined) {
+    updateLineStudy(lineKey, (current, now) => ({
+      ...current,
+      firstPlayedAt: current.firstPlayedAt || now,
+      lastPlayedAt: now,
+      playCount: (current.playCount || 0) + 1,
+    }))
+  }
+
+  function toggleLineMastered(lineKey: string | undefined) {
+    updateLineStudy(lineKey, (current, now) => {
+      const { masteredAt, ...rest } = current
+      return masteredAt ? rest : { ...current, masteredAt: now }
+    })
+  }
+
+  function toggleSavedLine(line: QuestLine, lineKey: string | undefined) {
+    if (!questStudyIdentity || !lineKey) return
+    const id = getLineSaveId(activeGame.id, questStudyIdentity.questKey, lineKey)
+    if (savedItemsById[id]) removeReviewState(id)
+    setSavedItemsById((current) => {
+      if (current[id]) {
+        const { [id]: removed, ...rest } = current
+        void removed
+        return rest
+      }
+
+      const now = new Date().toISOString()
+      return {
+        ...current,
+        [id]: {
+          type: 'line',
+          id,
+          gameId: activeGame.id,
+          questKey: questStudyIdentity.questKey,
+          lineKey,
+          lineId: line.id,
+          speakerEn: line.speakerEn || '',
+          speakerZh: line.speakerZh || '',
+          en: line.en,
+          zh: line.zh,
+          savedAt: now,
+          updatedAt: now,
+        },
+      }
+    })
+  }
+
+  function toggleSavedTerm(term: GlossaryTerm) {
+    if (!questStudyIdentity) return
+    const id = getTermSaveId(activeGame.id, questStudyIdentity.questKey, term)
+    if (savedItemsById[id]) removeReviewState(id)
+    setSavedItemsById((current) => {
+      if (current[id]) {
+        const { [id]: removed, ...rest } = current
+        void removed
+        return rest
+      }
+
+      const now = new Date().toISOString()
+      return {
+        ...current,
+        [id]: {
+          type: 'term',
+          id,
+          gameId: activeGame.id,
+          questKey: questStudyIdentity.questKey,
+          en: term.en,
+          zh: term.zh,
+          savedAt: now,
+          updatedAt: now,
+        },
+      }
+    })
+  }
+
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     void loadQuest()
@@ -151,6 +429,40 @@ function App() {
     setEnUrl(nextEnUrl)
     setZhUrl('auto')
     void loadQuest(nextEnUrl, 'auto')
+  }
+
+  function removeReviewState(itemId: string) {
+    setReviewItemsById((current) => {
+      if (!current[itemId]) return current
+      const { [itemId]: removed, ...rest } = current
+      void removed
+      return rest
+    })
+  }
+
+  function gradeSavedReview(itemId: string, grade: ReviewGrade) {
+    const now = new Date()
+    const nowMs = now.getTime()
+    setReviewNowMs(nowMs)
+    setReviewItemsById((current) => {
+      const currentInterval = current[itemId]?.intervalMinutes || 0
+      const intervalMinutes =
+        grade === 'again'
+          ? REVIEW_AGAIN_MINUTES
+          : currentInterval > REVIEW_AGAIN_MINUTES
+            ? Math.min(currentInterval * 2, REVIEW_MAX_KNOW_MINUTES)
+            : REVIEW_FIRST_KNOW_MINUTES
+
+      return {
+        ...current,
+        [itemId]: {
+          dueAt: new Date(nowMs + intervalMinutes * 60 * 1000).toISOString(),
+          intervalMinutes,
+          reviewedAt: now.toISOString(),
+          lastGrade: grade,
+        },
+      }
+    })
   }
 
   const speakers = useMemo(() => {
@@ -182,10 +494,14 @@ function App() {
     })
   }, [audioOnly, readerData, search, speaker])
 
-  const stats = useMemo(() => {
+  const stats = useMemo((): ReaderStats => {
     if (!readerData) {
-      return { progress: 0, audioVisible: 0, unmatched: 0, low: 0, visible: 0 }
+      return { progress: 0, audioVisible: 0, unmatched: 0, low: 0, visible: 0, total: 0, played: 0, revealed: 0, mastered: 0, studyProgress: 0 }
     }
+
+    const played = readerData.lines.filter((line) => lineStudyByKey[lineStudyKeys[line.id]]?.firstPlayedAt).length
+    const revealed = readerData.lines.filter((line) => lineStudyByKey[lineStudyKeys[line.id]]?.revealedAt).length
+    const mastered = readerData.lines.filter((line) => lineStudyByKey[lineStudyKeys[line.id]]?.masteredAt).length
 
     return {
       progress: readerData.meta.enCount ? readerData.meta.pairedCount / readerData.meta.enCount : 0,
@@ -193,8 +509,13 @@ function App() {
       unmatched: readerData.lines.filter((line) => line.confidence === 'unmatched').length,
       low: readerData.lines.filter((line) => line.confidence === 'low').length,
       visible: filteredLines.length,
+      total: readerData.lines.length,
+      played,
+      revealed,
+      mastered,
+      studyProgress: readerData.lines.length ? mastered / readerData.lines.length : 0,
     }
-  }, [filteredLines, readerData])
+  }, [filteredLines, lineStudyByKey, lineStudyKeys, readerData])
 
   const activeTab = RIGHT_TABS.find((tab) => tab.id === sidePanel) || RIGHT_TABS[0]
 
@@ -249,11 +570,15 @@ function App() {
             {isLoading ? '…' : '↻'}
           </button>
           <button
-            className={`icon-btn ${audioOnly ? 'is-on' : ''}`}
+            className={`icon-btn ${audioOnly && hasQuestAudio ? 'is-on' : ''}`}
             type="button"
-            data-hint="Audio only"
-            aria-pressed={audioOnly}
-            onClick={() => setAudioOnly((value) => !value)}
+            data-hint={audioAvailabilityHint}
+            {...(hasQuestAudio ? { 'aria-pressed': audioOnly } : {})}
+            disabled={!hasQuestAudio}
+            onClick={() => {
+              if (!hasQuestAudio) return
+              setAudioOnly((value) => !value)
+            }}
           >
             ♪
           </button>
@@ -319,7 +644,7 @@ function App() {
             <section className="source-panel">
               <h4>Sources <span className="pill">sample</span></h4>
               <p className="sample-note">
-                This game page is using curated prototype dialogue and glossary data while a live source connector is added.
+                This game page uses curated sample dialogue and glossary data. Reader/save/review/export/language-help flows are real; live source and playable-audio connectors are planned.
               </p>
             </section>
           )}
@@ -375,12 +700,25 @@ function App() {
                       <span className="chap-cn">{option.chapter} · {option.act}</span>
                     </button>
                   ))
-                : activeGame.chapters.map((chapter, index) => (
-                    <button key={chapter.id} className={`chapter-card ${index === 0 ? 'active' : ''}`} type="button">
-                      <span className="chap-name">{chapter.name}</span>
-                      <span className="chap-cn">{chapter.cn} · {Math.round(chapter.progress * 100)}% prototype</span>
-                    </button>
-                  ))}
+                : activeGame.chapters.map((chapter, index) => {
+                    const isCurrentSample = index === 0
+                    return (
+                      <button
+                        key={chapter.id}
+                        className={`chapter-card ${isCurrentSample ? 'active current-sample' : 'planned'}`}
+                        type="button"
+                        data-hint={isCurrentSample ? 'Current sample chapter' : 'Chapter routing planned'}
+                        disabled
+                      >
+                        <span className="chap-name">{chapter.name}</span>
+                        <span className="chap-cn">
+                          {isCurrentSample
+                            ? `${chapter.cn} · ${Math.round(chapter.progress * 100)}% prototype (sample)`
+                            : `${chapter.cn} · planned`}
+                        </span>
+                      </button>
+                    )
+                  })}
             </div>
           </section>
 
@@ -388,7 +726,7 @@ function App() {
             <b>{isLiveGame ? '真实数据源' : 'Prototype page'}</b><br />
             {isLiveGame
               ? 'English from Fandom MediaWiki · Chinese auto pairs from Kuro Wiki · MP3 preferred when bundled.'
-              : `${activeGame.name} is theme-complete with sample study content; live API integration can be added next.`}
+              : `${activeGame.name} uses curated sample study content today; live source and playable audio connectors are planned.`}
           </div>
         </aside>
 
@@ -425,6 +763,7 @@ function App() {
                   <p>
                     <b>Source:</b> {isLiveGame ? shortUrl(readerData.source.enUrl) : activeGame.studio}<br />
                     <b>Chinese:</b> {isLiveGame ? shortUrl(readerData.source.zhUrl) : activeGame.cn}<br />
+                    <b>Audio:</b> {audioAvailabilityLabel}<br />
                     <b>Focus:</b> {isLiveGame ? 'review official lines after playing; no AI translation is used.' : 'practice with theme-matched sample lines until a live connector exists.'}
                   </p>
                 </section>
@@ -446,9 +785,35 @@ function App() {
                 </section>
 
                 <div className="stream" role="list" aria-label={`${readerData.meta.enTitle} dialogue`}>
-                  {filteredLines.map((line) => (
-                    <DialogueCard key={line.id} line={line} hideChinese={hideChinese} />
-                  ))}
+                  {filteredLines.length ? (
+                    filteredLines.map((line) => {
+                      const lineStudyKey = lineStudyKeys[line.id]
+                      return (
+                        <DialogueCard
+                          key={line.id}
+                          line={line}
+                          hideChinese={hideChinese}
+                          studyState={lineStudyByKey[lineStudyKey] || {}}
+                          isSaved={Boolean(questStudyIdentity && savedItemsById[getLineSaveId(activeGame.id, questStudyIdentity.questKey, lineStudyKey)])}
+                          onReveal={() => markLineRevealed(lineStudyKey)}
+                          onPlayed={() => markLinePlayed(lineStudyKey)}
+                          onToggleMastered={() => toggleLineMastered(lineStudyKey)}
+                          onToggleSaved={() => toggleSavedLine(line, lineStudyKey)}
+                          isHelpOpen={selectedHelpLineId === line.id}
+                          onOpenLanguageHelp={() => {
+                            setSelectedHelpLineId(line.id)
+                            setSidePanel('study')
+                          }}
+                        />
+                      )
+                    })
+                  ) : (
+                    <EmptyReaderState
+                      audioOnly={audioOnly}
+                      hasQuestAudio={hasQuestAudio}
+                      hasActiveFilters={Boolean(search.trim()) || speaker !== 'all'}
+                    />
+                  )}
                 </div>
               </>
             )}
@@ -478,10 +843,22 @@ function App() {
           {readerData && sidePanel === 'study' && (
             <StudyPanel
               quest={readerData}
+              stats={stats}
               audioOnly={audioOnly}
               setAudioOnly={setAudioOnly}
+              hasQuestAudio={hasQuestAudio}
+              audioAvailabilityLabel={audioAvailabilityLabel}
               hideChinese={hideChinese}
               setHideChinese={setHideChinese}
+              savedItems={activeQuestSavedItems}
+              dueReviewItems={activeQuestDueReviewItems}
+              savedTermIds={savedTermIds}
+              gameId={activeGame.id}
+              questKey={questStudyIdentity?.questKey || ''}
+              languageHelp={selectedLanguageHelp}
+              onToggleTerm={toggleSavedTerm}
+              onGradeReview={gradeSavedReview}
+              onClearLanguageHelp={() => setSelectedHelpLineId('')}
             />
           )}
           {sidePanel === 'sources' && isLiveGame && (
@@ -505,8 +882,13 @@ function App() {
         isLive={isLiveGame}
         audioOnly={audioOnly}
         setAudioOnly={setAudioOnly}
+        hasQuestAudio={hasQuestAudio}
+        audioAvailabilityLabel={audioAvailabilityLabel}
+        audioAvailabilityHint={audioAvailabilityHint}
         hideChinese={hideChinese}
         setHideChinese={setHideChinese}
+        savedCount={activeGameSavedCount}
+        dueReviewCount={activeGameDueReviewCount}
         onHome={() => navigateToGame(null)}
       />
     </>
@@ -516,6 +898,7 @@ function App() {
 function HomePage({ games, onOpenGame }: { games: readonly Game[]; onOpenGame: (gameId: GameId) => void }) {
   const [selectedGameId, setSelectedGameId] = useState<GameId>('starrail')
   const selectedGame = getGame(selectedGameId)
+  const isSelectedLiveGame = selectedGame.id === LIVE_GAME_ID
   const selectedPalette = selectedGame.palettes[0]
 
   useEffect(() => {
@@ -546,13 +929,13 @@ function HomePage({ games, onOpenGame }: { games: readonly Game[]; onOpenGame: (
         </div>
         <GameTabs activeGame={selectedGame} onPick={setSelectedGameId} />
         <div className="top-actions">
-          <button className="icon-btn" type="button" data-hint="Daily timer">
+          <button className="icon-btn" type="button" data-hint="Daily timer planned" disabled>
             ◴
           </button>
-          <button className="icon-btn is-on" type="button" data-hint="Saved words">
+          <button className="icon-btn" type="button" data-hint="Saved list lives in reader; global page planned" disabled>
             ★
           </button>
-          <button className="icon-btn" type="button" data-hint="Settings">
+          <button className="icon-btn" type="button" data-hint="Settings/profile planned" disabled>
             ⚙
           </button>
         </div>
@@ -562,10 +945,10 @@ function HomePage({ games, onOpenGame }: { games: readonly Game[]; onOpenGame: (
         <LandingBackdrop game={selectedGame} />
         <section className="home-hero">
           <div className="home-copy">
-            <div className="home-kicker">● Game dialogue · no AI translation · 100% lore-authentic</div>
+            <div className="home-kicker">● {isSelectedLiveGame ? 'Live game dialogue · source-aware pairing · no AI translation' : 'Prototype sample reader · curated study lines · live connector planned'}</div>
             <h1>Learn English <span>from {selectedGame.name}.</span></h1>
             <div className="home-hero-cn">{selectedGame.cnTagline}</div>
-            <p>把你最熟的剧情，变成最高效的双语阅读课。原版语音 + 官方中文文本，逐句对齐，逐词查词。先听角色说，再学他们怎么说。</p>
+            <p>{isSelectedLiveGame ? '把你最熟的剧情，变成最高效的双语阅读课。官方/社区来源文本逐句对齐，尽量保留来源语音片段，不做 AI 翻译。' : '这是按游戏主题策划的 sample reader：双语阅读、保存、复习、导出、language help 都可用；真实来源连接器和语音覆盖会在后续迭代接入。'}</p>
             <div className="home-actions">
               <button className="primary-btn home-primary" type="button" onClick={() => onOpenGame(selectedGame.id)}>
                 进入阅读器 → {selectedGame.chapters[0].cn}
@@ -575,9 +958,19 @@ function HomePage({ games, onOpenGame }: { games: readonly Game[]; onOpenGame: (
               </button>
             </div>
             <div className="landing-stats" aria-label="Study stats">
-              <div><b>{selectedGame.sample.length * 19}</b><span>aligned lines</span></div>
-              <div><b>{selectedGame.sample.length * 12}</b><span>voice clips</span></div>
-              <div><b>{selectedGame.glossary.length}</b><span>core terms</span></div>
+              {isSelectedLiveGame ? (
+                <>
+                  <div><b>Live</b><span>connector</span></div>
+                  <div><b>Bundled</b><span>source clips</span></div>
+                  <div><b>{selectedGame.glossary.length}</b><span>core terms</span></div>
+                </>
+              ) : (
+                <>
+                  <div><b>{selectedGame.sample.length}</b><span>sample lines</span></div>
+                  <div><b>0</b><span>playable clips</span></div>
+                  <div><b>{selectedGame.glossary.length}</b><span>sample terms</span></div>
+                </>
+              )}
             </div>
           </div>
           <button className="home-poster" type="button" onClick={() => onOpenGame(selectedGame.id)}>
@@ -608,7 +1001,7 @@ function HomePage({ games, onOpenGame }: { games: readonly Game[]; onOpenGame: (
                   <span className="game-card-progress">
                     <i style={{ width: `${Math.round(game.chapters[0].progress * 100)}%` }} />
                   </span>
-                  <span className="game-card-meta">{game.chapters.length} chapters · {game.glossary.length} terms · {game.id === LIVE_GAME_ID ? 'live API' : 'sample'}</span>
+                  <span className="game-card-meta">{game.chapters.length} chapters · {game.glossary.length} terms · {game.id === LIVE_GAME_ID ? 'live Wuwa connector' : 'sample reader · connector planned'}</span>
                 </span>
               </button>
             </article>
@@ -706,18 +1099,28 @@ function ReaderDock({
   isLive,
   audioOnly,
   setAudioOnly,
+  hasQuestAudio,
+  audioAvailabilityLabel,
+  audioAvailabilityHint,
   hideChinese,
   setHideChinese,
+  savedCount,
+  dueReviewCount,
   onHome,
 }: {
   game: Game
   quest: QuestResponse | null
-  stats: { progress: number; audioVisible: number; unmatched: number; low: number; visible: number }
+  stats: ReaderStats
   isLive: boolean
   audioOnly: boolean
   setAudioOnly: (value: boolean) => void
+  hasQuestAudio: boolean
+  audioAvailabilityLabel: string
+  audioAvailabilityHint: string
   hideChinese: boolean
   setHideChinese: (value: boolean) => void
+  savedCount: number
+  dueReviewCount: number
   onHome: () => void
 }) {
   return (
@@ -728,10 +1131,71 @@ function ReaderDock({
         <i><b style={{ width: `${Math.round(stats.progress * 100)}%` }} /></i>
         <small>{quest?.meta.pairedCount || 0}/{quest?.meta.enCount || 0} · {isLive ? 'live' : 'sample'}</small>
       </div>
-      <button className={`dock-btn ${audioOnly ? 'is-on' : ''}`} type="button" onClick={() => setAudioOnly(!audioOnly)}>Audio only</button>
+      <button
+        className={`dock-btn ${audioOnly && hasQuestAudio ? 'is-on' : ''}`}
+        type="button"
+        title={audioAvailabilityHint}
+        {...(hasQuestAudio ? { 'aria-pressed': audioOnly } : {})}
+        disabled={!hasQuestAudio}
+        onClick={() => {
+          if (!hasQuestAudio) return
+          setAudioOnly(!audioOnly)
+        }}
+      >
+        {hasQuestAudio ? 'Audio only' : 'No audio'}
+      </button>
       <button className={`dock-btn ${hideChinese ? 'is-on' : ''}`} type="button" onClick={() => setHideChinese(!hideChinese)}>Hide CN</button>
-      <span className="dock-stat">{stats.visible} visible · {stats.audioVisible} audio</span>
+      <span className={`dock-review ${dueReviewCount ? 'is-due' : ''}`}>{dueReviewCount} due</span>
+      <span className="dock-stat">{stats.visible} visible · {stats.played} played · {stats.mastered} mastered · {savedCount} saved · {audioAvailabilityLabel}</span>
     </nav>
+  )
+}
+
+function EmptyReaderState({
+  audioOnly,
+  hasQuestAudio,
+  hasActiveFilters,
+}: {
+  audioOnly: boolean
+  hasQuestAudio: boolean
+  hasActiveFilters: boolean
+}) {
+  const copy = (() => {
+    if (audioOnly && !hasQuestAudio) {
+      return {
+        title: 'No audio clips are available yet.',
+        body: 'This quest or sample does not currently include playable source clips, so audio-only mode cannot show dialogue lines.',
+      }
+    }
+
+    if (audioOnly && hasQuestAudio) {
+      return {
+        title: 'No audio lines match current filters.',
+        body: 'Try clearing search or speaker filters, or turn off Audio only to see every dialogue line.',
+      }
+    }
+
+    if (hasActiveFilters) {
+      return {
+        title: 'No dialogue lines match filters.',
+        body: 'Try a different search term or choose All speakers.',
+      }
+    }
+
+    return {
+      title: 'No dialogue lines loaded.',
+      body: 'Load a quest source or switch to a sample game page with dialogue content.',
+    }
+  })()
+
+  return (
+    <div className="reader-empty-state" role="status">
+      <div className="empty-glyph" aria-hidden="true">♪</div>
+      <div>
+        <h3>{copy.title}</h3>
+        <p>{copy.body}</p>
+      </div>
+    </div>
   )
 }
 
@@ -742,7 +1206,7 @@ function SummaryPanel({
   isLive,
 }: {
   quest: QuestResponse
-  stats: { audioVisible: number; unmatched: number; low: number; visible: number }
+  stats: ReaderStats
   game: Game
   isLive: boolean
 }) {
@@ -759,6 +1223,9 @@ function SummaryPanel({
           <div className="goal-tile"><b>{stats.visible}</b><span>visible</span></div>
           <div className="goal-tile"><b>{stats.audioVisible}</b><span>audio shown</span></div>
           <div className="goal-tile"><b>{stats.unmatched}</b><span>unmatched</span></div>
+          <div className="goal-tile study-tile"><b>{stats.played}</b><span>played</span></div>
+          <div className="goal-tile study-tile"><b>{stats.revealed}</b><span>revealed</span></div>
+          <div className="goal-tile study-tile"><b>{stats.mastered}</b><span>mastered</span></div>
         </div>
       </section>
 
@@ -789,46 +1256,232 @@ function SummaryPanel({
 
 function StudyPanel({
   quest,
+  stats,
   audioOnly,
   setAudioOnly,
+  hasQuestAudio,
+  audioAvailabilityLabel,
   hideChinese,
   setHideChinese,
+  savedItems,
+  dueReviewItems,
+  savedTermIds,
+  onToggleTerm,
+  onGradeReview,
+  gameId,
+  questKey,
+  languageHelp,
+  onClearLanguageHelp,
 }: {
   quest: QuestResponse
+  stats: ReaderStats
   audioOnly: boolean
   setAudioOnly: (value: boolean) => void
+  hasQuestAudio: boolean
+  audioAvailabilityLabel: string
   hideChinese: boolean
   setHideChinese: (value: boolean) => void
+  savedItems: SavedItem[]
+  dueReviewItems: SavedItem[]
+  savedTermIds: Set<string>
+  onToggleTerm: (term: GlossaryTerm) => void
+  onGradeReview: (itemId: string, grade: ReviewGrade) => void
+  gameId: string
+  questKey: string
+  languageHelp: LanguageHelp | null
+  onClearLanguageHelp: () => void
 }) {
+  const recentSavedItems = savedItems.slice(0, 5)
+  const activeReviewItem = dueReviewItems[0]
+  const [showReviewAnswer, setShowReviewAnswer] = useState(false)
+
+  useEffect(() => {
+    setShowReviewAnswer(false)
+  }, [activeReviewItem?.id])
+
+  function gradeReview(grade: ReviewGrade) {
+    if (!activeReviewItem) return
+    onGradeReview(activeReviewItem.id, grade)
+    setShowReviewAnswer(false)
+  }
+
   return (
     <>
       <section className="panel due">
-        <h4><span className="pulse" aria-hidden="true" /> Study loop <span className="pill">reader</span></h4>
+        <h4><span className="pulse" aria-hidden="true" /> Study loop <span className="pill">local</span></h4>
+        <div className="study-progress-card" aria-label="Local study progress">
+          <div className="study-progress-top">
+            <span>Study progress</span>
+            <b>{stats.mastered}/{stats.total}</b>
+          </div>
+          <div className="goal-bar" aria-hidden="true"><i style={{ width: `${Math.round(stats.studyProgress * 100)}%` }} /></div>
+          <div className="study-count-row">
+            <span>{stats.played} played</span>
+            <span>{stats.revealed} revealed</span>
+            <span>{stats.mastered} mastered</span>
+          </div>
+        </div>
         <div className="toggle-line">
           <span>Audio lines only · 只看有语音的句子</span>
-          <button className={`toggle ${audioOnly ? 'is-on' : ''}`} type="button" aria-pressed={audioOnly} onClick={() => setAudioOnly(!audioOnly)}><i /></button>
+          <button
+            className={`toggle ${audioOnly && hasQuestAudio ? 'is-on' : ''}`}
+            type="button"
+            aria-pressed={audioOnly && hasQuestAudio}
+            aria-describedby="audio-availability-note"
+            disabled={!hasQuestAudio}
+            onClick={() => {
+              if (!hasQuestAudio) return
+              setAudioOnly(!audioOnly)
+            }}
+          >
+            <i />
+          </button>
         </div>
+        <p className="audio-availability-note" id="audio-availability-note">
+          {hasQuestAudio
+            ? `${audioAvailabilityLabel} · audio-only filters to dialogue lines with playable source clips.`
+            : 'Audio-only unavailable · this sample has no playable clips yet.'}
+        </p>
+        <p className="voice-honesty-note">
+          Voice practice is deferred for launch; current MVP is listening playback from available source clips.
+        </p>
         <div className="toggle-line">
           <span>Hide Chinese first · 点击单句显示中文</span>
           <button className={`toggle ${hideChinese ? 'is-on' : ''}`} type="button" aria-pressed={hideChinese} onClick={() => setHideChinese(!hideChinese)}><i /></button>
         </div>
       </section>
 
+      <LanguageHelpPanel help={languageHelp} onClear={onClearLanguageHelp} />
+
+      <section className="panel saved-summary">
+        <h4>Saved · 收藏 <span className="pill">{savedItems.length}</span></h4>
+        <p className="saved-copy">
+          Saved lines and terms stay in this browser for this game quest. Items with no review history are due now.
+        </p>
+        {recentSavedItems.length ? (
+          <div className="saved-list" aria-label="Recent saved items">
+            {recentSavedItems.map((item) => (
+              <div className="saved-item" key={item.id}>
+                <span className={`saved-type ${item.type}`}>{item.type === 'line' ? 'Line' : 'Term'}</span>
+                <div>
+                  <b>{item.type === 'line' ? item.en || item.zh : item.en}</b>
+                  <small>{item.type === 'line' ? item.speakerEn || item.speakerZh || 'Saved dialogue' : item.zh}</small>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="saved-empty">Use ★ on dialogue or glossary terms to build a local save list.</p>
+        )}
+      </section>
+
+      <section className="panel review-panel">
+        <h4>Review queue · 复习 <span className="pill">{dueReviewItems.length} due</span></h4>
+        {activeReviewItem ? (
+          <div className="review-card" aria-live="polite">
+            <div className="review-kicker">
+              <span className={`saved-type ${activeReviewItem.type}`}>{activeReviewItem.type === 'line' ? 'Line' : 'Term'}</span>
+              <small>{activeReviewItem.type === 'line' ? activeReviewItem.speakerEn || activeReviewItem.speakerZh || 'Saved dialogue' : 'Saved glossary'}</small>
+            </div>
+            <p className="review-prompt">{activeReviewItem.type === 'line' ? activeReviewItem.en || activeReviewItem.zh : activeReviewItem.en}</p>
+            {showReviewAnswer ? (
+              <>
+                <div className="review-answer">
+                  <span>Answer</span>
+                  <b>{activeReviewItem.type === 'line' ? activeReviewItem.zh || activeReviewItem.en : activeReviewItem.zh}</b>
+                </div>
+                <div className="review-actions">
+                  <button className="act-btn again-btn" type="button" onClick={() => gradeReview('again')}>Again · 10m</button>
+                  <button className="act-btn know-btn" type="button" onClick={() => gradeReview('know')}>Know · later</button>
+                </div>
+              </>
+            ) : (
+              <button className="primary-btn review-show" type="button" onClick={() => setShowReviewAnswer(true)}>Show answer</button>
+            )}
+          </div>
+        ) : (
+          <p className="saved-empty">No due saved lines or terms right now. Save another item, or come back when scheduled reviews mature.</p>
+        )}
+        <p className="review-note">Local MVP: Again schedules about 10 minutes out; Know starts at 1 day and grows with each correct review.</p>
+      </section>
+
       <section className="panel saved">
         <h4>Glossary · 关键词 <span className="pill">{quest.terms.length}</span></h4>
         <div className="gloss-list">
-          {quest.terms.map((term) => (
-            <div className="gloss-row" key={term.en}>
-              <div>
-                <div className="gloss-en">{term.en}</div>
-                <span className="gloss-meta">source term</span>
+          {quest.terms.map((term) => {
+            const termSaveId = getTermSaveId(gameId, questKey, term)
+            const isSaved = savedTermIds.has(termSaveId)
+            return (
+              <div className="gloss-row" key={term.en}>
+                <div>
+                  <div className="gloss-en">{term.en}</div>
+                  <span className="gloss-meta">source term</span>
+                </div>
+                <div className="gloss-actions">
+                  <div className="gloss-cn">{term.zh}</div>
+                  <button className={`term-save ${isSaved ? 'is-on' : ''}`} type="button" aria-pressed={isSaved} onClick={() => onToggleTerm(term)}>
+                    {isSaved ? '★ Saved' : '☆ Save'}
+                  </button>
+                </div>
               </div>
-              <div className="gloss-cn">{term.zh}</div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       </section>
     </>
+  )
+}
+
+function LanguageHelpPanel({ help, onClear }: { help: LanguageHelp | null; onClear: () => void }) {
+  if (!help) {
+    return (
+      <section className="panel language-help-panel">
+        <h4>Language help · 句子提示 <span className="pill">local</span></h4>
+        <p className="saved-empty">Pick <b>Language help</b> on any dialogue line to see local glossary matches and basic reading hints here.</p>
+        <p className="help-disclaimer">Local hints only — not a full dictionary or AI grammar parser.</p>
+      </section>
+    )
+  }
+
+  const { line, terms, hints } = help
+
+  return (
+    <section className="panel language-help-panel has-help" aria-live="polite">
+      <h4>Language help · 句子提示 <span className="pill">local</span></h4>
+      <div className="help-context">
+        <span>{line.speakerEn || line.speakerZh || 'Narration'}</span>
+        <small>{line.speakerZh ? `${line.speakerZh} · ` : ''}{line.type === 'choice' ? 'player choice' : 'dialogue line'} · {confidenceText(line.confidence)}</small>
+      </div>
+      <div className="help-snippet">
+        {line.en && <p><span>EN</span>{line.en}</p>}
+        {line.zh && <p><span>ZH</span>{line.zh}</p>}
+      </div>
+      <div className="help-block">
+        <h5>Matched terms</h5>
+        {terms.length ? (
+          <div className="help-term-list">
+            {terms.map((term) => (
+              <span className="help-term" key={`${term.en}:${term.zh}`}>
+                <b>{term.en}</b>
+                <small>{term.zh}</small>
+              </span>
+            ))}
+          </div>
+        ) : (
+          <p className="help-empty">No source glossary terms matched this line.</p>
+        )}
+      </div>
+      <div className="help-block">
+        <h5>Reading hints</h5>
+        <ul className="help-hints">
+          {hints.map((hint) => (
+            <li key={hint}>{hint}</li>
+          ))}
+        </ul>
+      </div>
+      <p className="help-disclaimer">Local hints only — not a full dictionary or AI grammar parser.</p>
+      <button className="mini-btn help-clear" type="button" onClick={onClear}>Clear language help</button>
+    </section>
   )
 }
 
@@ -874,7 +1527,7 @@ function SampleSourcesPanel({ game }: { game: Game }) {
         <div className="sp-row"><span>{game.cn}</span><span>{game.sample.length} lines</span></div>
       </div>
       <p className="sample-note">
-        This page already has its own route, palettes, chapter rail, glossary, and export flow. The live dialogue connector is intentionally not stubbed as real data.
+        This page is a curated sample reader with real route/palette/chapter, save/review/export, and language-help flows. It does not have a live source connector or playable source clips yet.
       </p>
     </section>
   )
@@ -883,7 +1536,7 @@ function SampleSourcesPanel({ game }: { game: Game }) {
 function ExportPanel({ quest, exportTsv, isLive }: { quest: QuestResponse; exportTsv: () => void; isLive: boolean }) {
   return (
     <section className="panel share-card">
-      <h4>Export · 分享</h4>
+      <h4>Export · 导出</h4>
       <div className="share-preview" aria-hidden="true">
         <div className="sp-kicker">GLearning · {isLive ? 'live' : 'sample'}</div>
         <div className="sp-title">{quest.meta.pairedCount} paired dialogue lines</div>
@@ -894,6 +1547,9 @@ function ExportPanel({ quest, exportTsv, isLive }: { quest: QuestResponse; expor
         {isLive && <a className="mini-btn" href={quest.source.enUrl} target="_blank" rel="noreferrer">Fandom</a>}
         {isLive && <a className="mini-btn" href={quest.source.zhUrl} target="_blank" rel="noreferrer">Chinese</a>}
       </div>
+      <p className="sample-note">
+        Launch export/share MVP is TSV only. Share cards, profiles, accounts, cloud sync, and public progress pages are deferred. Saved and review data stay local to this browser.
+      </p>
     </section>
   )
 }
@@ -923,6 +1579,255 @@ function getInitialPalette(game: Game) {
 
 function getPaletteStorageKey(gameId: string) {
   return `${PALETTE_STORAGE_PREFIX}-${gameId}`
+}
+
+function getQuestStudyIdentity(gameId: string, quest: QuestResponse): QuestStudyIdentity {
+  const questKey = hashString([gameId, quest.source.enUrl, quest.source.zhUrl, quest.meta.enTitle].join('|'))
+  return {
+    questKey,
+    storageKey: `${STUDY_STORAGE_PREFIX}:${gameId}:${questKey}`,
+  }
+}
+
+function buildLineStudyKeys(lines: QuestLine[]) {
+  const seen = new Map<string, number>()
+  const keys: Record<string, string> = {}
+
+  lines.forEach((line) => {
+    const speaker = line.speakerEn || line.speakerZh || ''
+    const text = line.en || line.zh || ''
+    const baseKey = hashString([line.type, speaker, text].join('|'))
+    const occurrence = seen.get(baseKey) || 0
+    seen.set(baseKey, occurrence + 1)
+    keys[line.id] = `${baseKey}:${occurrence}`
+  })
+
+  return keys
+}
+
+function readStoredStudyState(storageKey: string): StoredQuestStudyState | null {
+  if (typeof window === 'undefined') return null
+
+  try {
+    const raw = window.localStorage.getItem(storageKey)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<StoredQuestStudyState>
+    if (parsed.version !== STUDY_STORAGE_VERSION || !parsed.lines || typeof parsed.lines !== 'object') {
+      return null
+    }
+
+    return {
+      version: STUDY_STORAGE_VERSION,
+      gameId: typeof parsed.gameId === 'string' ? parsed.gameId : '',
+      questKey: typeof parsed.questKey === 'string' ? parsed.questKey : '',
+      updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : '',
+      lines: sanitizeStudyLines(parsed.lines),
+    }
+  } catch (caught) {
+    console.warn('Unable to read GLearning study state.', caught)
+    return null
+  }
+}
+
+function writeStoredStudyState(storageKey: string, gameId: string, questKey: string, lines: Record<string, LineStudyState>) {
+  if (typeof window === 'undefined') return
+
+  try {
+    const payload: StoredQuestStudyState = {
+      version: STUDY_STORAGE_VERSION,
+      gameId,
+      questKey,
+      updatedAt: new Date().toISOString(),
+      lines,
+    }
+    window.localStorage.setItem(storageKey, JSON.stringify(payload))
+  } catch (caught) {
+    console.warn('Unable to persist GLearning study state.', caught)
+  }
+}
+
+function readStoredSaves(): StoredSavedItems | null {
+  if (typeof window === 'undefined') return null
+
+  try {
+    const raw = window.localStorage.getItem(SAVES_STORAGE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<StoredSavedItems>
+    if (parsed.version !== SAVES_STORAGE_VERSION || !parsed.items || typeof parsed.items !== 'object') {
+      return null
+    }
+
+    return {
+      version: SAVES_STORAGE_VERSION,
+      updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : '',
+      items: sanitizeSavedItems(parsed.items),
+    }
+  } catch (caught) {
+    console.warn('Unable to read GLearning saved items.', caught)
+    return null
+  }
+}
+
+function writeStoredSaves(items: Record<string, SavedItem>) {
+  if (typeof window === 'undefined') return
+
+  try {
+    const payload: StoredSavedItems = {
+      version: SAVES_STORAGE_VERSION,
+      updatedAt: new Date().toISOString(),
+      items,
+    }
+    window.localStorage.setItem(SAVES_STORAGE_KEY, JSON.stringify(payload))
+  } catch (caught) {
+    console.warn('Unable to persist GLearning saved items.', caught)
+  }
+}
+
+function readStoredReviewItems(): StoredReviewItems | null {
+  if (typeof window === 'undefined') return null
+
+  try {
+    const raw = window.localStorage.getItem(REVIEW_STORAGE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<StoredReviewItems>
+    if (parsed.version !== REVIEW_STORAGE_VERSION || !parsed.items || typeof parsed.items !== 'object') {
+      return null
+    }
+
+    return {
+      version: REVIEW_STORAGE_VERSION,
+      updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : '',
+      items: sanitizeReviewItems(parsed.items),
+    }
+  } catch (caught) {
+    console.warn('Unable to read GLearning review state.', caught)
+    return null
+  }
+}
+
+function writeStoredReviewItems(items: Record<string, ReviewItemState>) {
+  if (typeof window === 'undefined') return
+
+  try {
+    const payload: StoredReviewItems = {
+      version: REVIEW_STORAGE_VERSION,
+      updatedAt: new Date().toISOString(),
+      items,
+    }
+    window.localStorage.setItem(REVIEW_STORAGE_KEY, JSON.stringify(payload))
+  } catch (caught) {
+    console.warn('Unable to persist GLearning review state.', caught)
+  }
+}
+
+function sanitizeReviewItems(value: Record<string, ReviewItemState>) {
+  const items: Record<string, ReviewItemState> = {}
+
+  Object.entries(value).forEach(([id, state]) => {
+    if (!state || typeof state !== 'object' || typeof state.dueAt !== 'string') return
+    items[id] = {
+      dueAt: state.dueAt,
+      intervalMinutes: typeof state.intervalMinutes === 'number' && state.intervalMinutes > 0 ? state.intervalMinutes : REVIEW_AGAIN_MINUTES,
+      ...(typeof state.reviewedAt === 'string' ? { reviewedAt: state.reviewedAt } : {}),
+      ...(state.lastGrade === 'again' || state.lastGrade === 'know' ? { lastGrade: state.lastGrade } : {}),
+    }
+  })
+
+  return items
+}
+
+function getDueReviewItems(savedItems: SavedItem[], reviewItems: Record<string, ReviewItemState>, nowMs: number) {
+  return savedItems
+    .filter((item) => isReviewDue(item.id, reviewItems, nowMs))
+    .sort((left, right) => getReviewDueMs(left.id, reviewItems) - getReviewDueMs(right.id, reviewItems) || right.updatedAt.localeCompare(left.updatedAt))
+}
+
+function countDueReviewItems(savedItems: SavedItem[], reviewItems: Record<string, ReviewItemState>, nowMs: number) {
+  return savedItems.filter((item) => isReviewDue(item.id, reviewItems, nowMs)).length
+}
+
+function isReviewDue(itemId: string, reviewItems: Record<string, ReviewItemState>, nowMs: number) {
+  return getReviewDueMs(itemId, reviewItems) <= nowMs
+}
+
+function getReviewDueMs(itemId: string, reviewItems: Record<string, ReviewItemState>) {
+  const dueAt = reviewItems[itemId]?.dueAt
+  if (!dueAt) return 0
+  const dueMs = Date.parse(dueAt)
+  return Number.isFinite(dueMs) ? dueMs : 0
+}
+
+function sanitizeSavedItems(value: Record<string, SavedItem>) {
+  const items: Record<string, SavedItem> = {}
+
+  Object.entries(value).forEach(([id, item]) => {
+    if (!item || typeof item !== 'object' || (item.type !== 'line' && item.type !== 'term')) return
+    if (typeof item.gameId !== 'string' || typeof item.questKey !== 'string') return
+
+    if (item.type === 'line') {
+      items[id] = {
+        type: 'line',
+        id: typeof item.id === 'string' ? item.id : id,
+        gameId: item.gameId,
+        questKey: item.questKey,
+        lineKey: typeof item.lineKey === 'string' ? item.lineKey : '',
+        lineId: typeof item.lineId === 'string' ? item.lineId : '',
+        speakerEn: typeof item.speakerEn === 'string' ? item.speakerEn : '',
+        speakerZh: typeof item.speakerZh === 'string' ? item.speakerZh : '',
+        en: typeof item.en === 'string' ? item.en : '',
+        zh: typeof item.zh === 'string' ? item.zh : '',
+        savedAt: typeof item.savedAt === 'string' ? item.savedAt : '',
+        updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : typeof item.savedAt === 'string' ? item.savedAt : '',
+      }
+      return
+    }
+
+    items[id] = {
+      type: 'term',
+      id: typeof item.id === 'string' ? item.id : id,
+      gameId: item.gameId,
+      questKey: item.questKey,
+      en: typeof item.en === 'string' ? item.en : '',
+      zh: typeof item.zh === 'string' ? item.zh : '',
+      savedAt: typeof item.savedAt === 'string' ? item.savedAt : '',
+      updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : typeof item.savedAt === 'string' ? item.savedAt : '',
+    }
+  })
+
+  return items
+}
+
+function getLineSaveId(gameId: string, questKey: string, lineKey: string | undefined) {
+  return `${gameId}:${questKey}:line:${lineKey || ''}`
+}
+
+function getTermSaveId(gameId: string, questKey: string, term: GlossaryTerm) {
+  return `${gameId}:${questKey}:term:${hashString([term.en, term.zh].join('|'))}`
+}
+
+function sanitizeStudyLines(value: Record<string, LineStudyState>) {
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, state]) => state && typeof state === 'object')
+      .map(([key, state]) => [
+        key,
+        {
+          ...(typeof state.revealedAt === 'string' ? { revealedAt: state.revealedAt } : {}),
+          ...(typeof state.firstPlayedAt === 'string' ? { firstPlayedAt: state.firstPlayedAt } : {}),
+          ...(typeof state.lastPlayedAt === 'string' ? { lastPlayedAt: state.lastPlayedAt } : {}),
+          ...(typeof state.playCount === 'number' ? { playCount: state.playCount } : {}),
+          ...(typeof state.masteredAt === 'string' ? { masteredAt: state.masteredAt } : {}),
+        },
+      ]),
+  )
+}
+
+function hashString(value: string) {
+  let hash = 5381
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 33) ^ value.charCodeAt(index)
+  }
+  return (hash >>> 0).toString(36)
 }
 
 function createSampleQuest(game: Game): QuestResponse {
@@ -973,14 +1878,98 @@ function groupQuestsByChapter(quests: MainQuestOption[]) {
   return [...groups.entries()]
 }
 
-function DialogueCard({ line, hideChinese }: { line: QuestLine; hideChinese: boolean }) {
-  const [revealed, setRevealed] = useState(!hideChinese)
+function buildLanguageHelp(quest: QuestResponse, selectedLineId: string): LanguageHelp | null {
+  if (!selectedLineId) return null
+  const line = quest.lines.find((candidate) => candidate.id === selectedLineId)
+  if (!line) return null
+
+  return {
+    line,
+    terms: matchLineGlossaryTerms(quest.terms, line),
+    hints: buildGrammarHints(line),
+  }
+}
+
+function matchLineGlossaryTerms(terms: GlossaryTerm[], line: QuestLine) {
+  const normalizedLineEn = normalizeHelpText(line.en)
+  const normalizedLineZh = normalizeHelpText(line.zh)
+  const matched = new Map<string, GlossaryTerm>()
+
+  terms.forEach((term) => {
+    const normalizedEn = normalizeHelpText(term.en)
+    const normalizedZh = normalizeHelpText(term.zh)
+    const englishMatch = normalizedEn.length >= 3 && normalizedLineEn.includes(normalizedEn)
+    const chineseMatch = Boolean(normalizedZh && normalizedLineZh.includes(normalizedZh))
+
+    if (!englishMatch && !chineseMatch) return
+    matched.set(`${normalizedEn}|${normalizedZh}`, term)
+  })
+
+  return [...matched.values()].sort((left, right) => right.en.length - left.en.length).slice(0, 6)
+}
+
+function buildGrammarHints(line: QuestLine) {
+  const text = `${line.en} ${line.zh}`
+  const hints: string[] = []
+
+  if (/[?？]/.test(text)) {
+    hints.push('Question form: read for what the speaker is asking, requesting, or checking.')
+  }
+  if (/(["“”「」『』《》])|(^|[\s([{])'[^']+'(?=$|[\s,.;:!?)}\]])/.test(text)) {
+    hints.push('Direct speech: quoted words are being repeated or named inside the line.')
+  }
+  if (/\b(can|could|will|would|should|must|may|might)\b/i.test(line.en)) {
+    hints.push('Modal verb: note the attitude — ability, possibility, advice, duty, or future intent.')
+  }
+  if (/\b\w+['’](?:m|re|ve|ll|d|s|t)\b/i.test(line.en)) {
+    hints.push('Spoken contraction: the shortened form makes the line sound more conversational.')
+  }
+  if (line.type === 'choice') {
+    hints.push('Player-choice phrasing: read it as an option the player can select, not neutral narration.')
+  }
+
+  return (hints.length ? hints : ['Role and intent: identify who is speaking, what they want, and how the Chinese line frames the same idea.']).slice(0, 3)
+}
+
+function normalizeHelpText(value: string) {
+  return value.normalize('NFKC').replace(/[’]/g, "'").replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
+function DialogueCard({
+  line,
+  hideChinese,
+  studyState,
+  onReveal,
+  onPlayed,
+  onToggleMastered,
+  isSaved,
+  onToggleSaved,
+  isHelpOpen,
+  onOpenLanguageHelp,
+}: {
+  line: QuestLine
+  hideChinese: boolean
+  studyState: LineStudyState
+  onReveal: () => void
+  onPlayed: () => void
+  onToggleMastered: () => void
+  isSaved: boolean
+  onToggleSaved: () => void
+  isHelpOpen: boolean
+  onOpenLanguageHelp: () => void
+}) {
+  const [revealed, setRevealed] = useState(Boolean(studyState.revealedAt) || !hideChinese)
 
   useEffect(() => {
-    setRevealed(!hideChinese)
-  }, [hideChinese])
+    setRevealed(Boolean(studyState.revealedAt) || !hideChinese)
+  }, [hideChinese, studyState.revealedAt])
 
-  const status = line.confidence === 'unmatched' ? 'unread' : line.confidence === 'low' ? 'heard' : 'mastered'
+  function revealChinese() {
+    setRevealed(true)
+    if (!studyState.revealedAt) onReveal()
+  }
+
+  const status = getLineStudyStatus(studyState)
   const avatarText = (line.speakerEn || line.speakerZh || '?').slice(0, 1).toUpperCase()
 
   return (
@@ -991,20 +1980,21 @@ function DialogueCard({ line, hideChinese }: { line: QuestLine; hideChinese: boo
         <div className="meta">
           <span className="speaker">{line.speakerEn || 'Unmatched'}</span>
           <span className="speaker-cn">· {line.speakerZh || '未匹配'}</span>
-          <span className={`state-tag ${status}`}>{confidenceText(line.confidence)}</span>
+          <span className={`state-tag learner-state ${status}`}>{studyStatusText(status)}</span>
+          <span className={`confidence-tag alignment-${line.confidence}`}>align: {confidenceText(line.confidence)}</span>
           <span className="line-id">#{line.id}</span>
         </div>
         {line.en && <p className="en">{line.en}</p>}
         {line.zh && (
           <p
             className={`zh ${revealed ? '' : 'is-hidden'}`}
-            onClick={() => setRevealed(true)}
+            onClick={revealChinese}
             role="button"
             tabIndex={0}
             onKeyDown={(event) => {
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault()
-                setRevealed(true)
+                revealChinese()
               }
             }}
           >
@@ -1012,12 +2002,21 @@ function DialogueCard({ line, hideChinese }: { line: QuestLine; hideChinese: boo
           </p>
         )}
         <div className="actions">
-          {line.audioUrl && <VoicePlayer line={line} />}
+          {line.audioUrl && <VoicePlayer line={line} onPlayed={onPlayed} />}
           {line.zh && (
-            <button className={`act-btn ${revealed ? 'is-on' : ''}`} type="button" onClick={() => setRevealed((value) => !value)}>
+            <button className={`act-btn ${revealed ? 'is-on' : ''}`} type="button" onClick={() => (revealed ? setRevealed(false) : revealChinese())}>
               {revealed ? '◑ Hide CN' : '👁 Reveal CN'}
             </button>
           )}
+          <button className={`act-btn master-btn ${studyState.masteredAt ? 'is-on' : ''}`} type="button" aria-pressed={Boolean(studyState.masteredAt)} onClick={onToggleMastered}>
+            {studyState.masteredAt ? '✓ Mastered' : '✓ Mark mastered'}
+          </button>
+          <button className={`act-btn save-btn ${isSaved ? 'is-on' : ''}`} type="button" aria-pressed={isSaved} onClick={onToggleSaved}>
+            {isSaved ? '★ Saved' : '☆ Save line'}
+          </button>
+          <button className={`act-btn help-btn ${isHelpOpen ? 'is-on' : ''}`} type="button" aria-pressed={isHelpOpen} onClick={onOpenLanguageHelp}>
+            {isHelpOpen ? 'Help open' : 'Language help'}
+          </button>
           <span className="act-note">{line.type}</span>
         </div>
       </div>
@@ -1025,7 +2024,7 @@ function DialogueCard({ line, hideChinese }: { line: QuestLine; hideChinese: boo
   )
 }
 
-function VoicePlayer({ line }: { line: QuestLine }) {
+function VoicePlayer({ line, onPlayed }: { line: QuestLine; onPlayed: () => void }) {
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const [status, setStatus] = useState<'idle' | 'loading' | 'playing' | 'error'>('idle')
   const [audioError, setAudioError] = useState('')
@@ -1047,6 +2046,7 @@ function VoicePlayer({ line }: { line: QuestLine }) {
       setAudioError('')
       await audio.play()
       setStatus('playing')
+      onPlayed()
     } catch {
       setStatus('error')
       setAudioError(audioSupportMessage(Boolean(line.audioMp3Url)))
@@ -1118,6 +2118,23 @@ function confidenceText(confidence: PairConfidence) {
       return 'review'
     case 'unmatched':
       return 'unmatched'
+  }
+}
+
+function getLineStudyStatus(studyState: LineStudyState): LineStudyStatus {
+  if (studyState.masteredAt) return 'mastered'
+  if (studyState.firstPlayedAt || studyState.revealedAt) return 'heard'
+  return 'unread'
+}
+
+function studyStatusText(status: LineStudyStatus) {
+  switch (status) {
+    case 'mastered':
+      return 'Mastered'
+    case 'heard':
+      return 'Seen'
+    case 'unread':
+      return 'New'
   }
 }
 

@@ -1,6 +1,6 @@
 # GLearning
 
-GLearning is a game-dialogue English learning site. It turns familiar quest dialogue into a bilingual reader with game-specific themes, source-aware pairing, audio playback, glossary review, and TSV export.
+GLearning is a game-dialogue English learning site. It turns familiar quest dialogue into a bilingual reader with game-specific themes, source-aware pairing, source-clip audio playback, glossary review, and TSV export.
 
 Live site: <https://glearning.pages.dev>
 
@@ -10,10 +10,12 @@ Chinese documentation: [README.zh-CN.md](./README.zh-CN.md)
 
 The production app has two layers:
 
-- A multi-game landing page with per-game routes, palettes, decorative motifs, and sample study content for eight games.
+- A multi-game landing page with per-game routes, palettes, decorative motifs, and launch-honest live/sample status copy.
 - A real Wuthering Waves reader backed by live wiki/API data, not mock dialogue.
 
-Wuthering Waves is currently the only game with a live data connector. The other game pages use curated prototype dialogue and glossary data so the theme, route, reader, and export flows are already in place without pretending that a live connector exists.
+Wuthering Waves is currently the only game with a live data connector. The other game pages are launch-honest sample readers with curated dialogue/glossary content, so bilingual reading, save, review, export, and language-help flows are usable without pretending that a live connector exists.
+
+Audio at launch is an honest playback MVP: Wuthering Waves can play available source clips line by line, while sample readers intentionally show 0 playable clips until a real connector is added. Voice recording, pronunciation scoring, TTS, and generated/new audio sources are deferred.
 
 ## Supported Game Pages
 
@@ -57,15 +59,21 @@ Explicit Chinese URLs still work for manual source pairing:
 
 ## Features
 
-- Multi-game landing page with per-game theme tabs.
+- Multi-game landing page with per-game theme tabs and live/sample honesty copy.
 - Per-game reader route and palette selection.
+- Wuthering Waves marked as the only live connector; non-live games are explicitly labeled sample readers with connector planned.
 - Live Wuthering Waves quest catalogue from `/api/main-quests`.
 - Wuthering Waves English/Fandom + Chinese/Kuro/BWIKI pairing through `/api/quest`.
 - Dialogue stream with speaker labels, Chinese reveal mode, search, speaker filter, density controls, and audio-only mode.
-- Audio playback with local MP3 preference for bundled Wuthering Waves voice files.
-- Study panel with glossary terms.
+- Browser-local per-line study progress: played, revealed, and mastered state persists per game/quest.
+- Browser-local saved dialogue lines and glossary terms persist in `localStorage` key `glearning-saves-v1`, scoped by game and quest, with a compact recent list in the Study panel.
+- Browser-local due review queue persists in `localStorage` key `glearning-review-v1`: saved lines/terms with no review state are due now, `Again` schedules about 10 minutes out, and `Know` grows a simple local interval.
+- Audio playback with local MP3 preference for bundled Wuthering Waves voice files; sample games intentionally have no playable source clips unless a connector is added, and audio-only controls are disabled or labeled unavailable when the current quest/sample has no playable clips.
+- Study panel with glossary terms, saved term toggles, and a lightweight saved line/term review card.
+- Contextual language help MVP: a dialogue-line button opens local deterministic glossary matches and basic grammar/reading hints in the Study panel.
 - Source panel for manual Fandom/BWIKI/Kuro source swapping.
-- TSV export for Anki or spreadsheet review.
+- TSV export is the current launch export/share MVP for Anki or spreadsheet review.
+- Share cards, profiles, accounts, cloud sync, and public progress pages are explicitly deferred beyond launch.
 - SPA redirects so direct game routes work on Cloudflare Pages.
 
 ## Tech Stack
@@ -114,7 +122,7 @@ Run the full Pages environment:
 npm run pages:dev
 ```
 
-Use `pages:dev` when testing `/api/quest`, `/api/main-quests`, audio behavior, or direct game routes.
+Use `pages:dev` when testing `/api/quest`, `/api/main-quests`, audio playback availability, or direct game routes.
 
 Build for production:
 
@@ -176,17 +184,85 @@ Manual Kuro pairing:
 GET /api/quest?enUrl=<fandom-url>&zhUrl=<wiki.kurobbs.com-mc-item-url>
 ```
 
+## Launch Smoke Checklist
+
+Use this checklist for launch-closeout smoke validation.
+
+### 1) Build
+
+```bash
+npm run build
+```
+
+### 2) Local Pages runtime (Functions + SPA routing)
+
+```bash
+npm run pages:dev
+```
+
+Expected: `pages:dev` should not emit the Wrangler `_redirects` infinite-loop warning, and `/api/*` function routes must remain unshadowed by SPA redirects.
+
+In another terminal while `pages:dev` is running:
+
+```bash
+curl -i http://127.0.0.1:8788/
+curl -i http://127.0.0.1:8788/games/wuwa
+curl -i http://127.0.0.1:8788/games/cyberpunk
+curl -s http://127.0.0.1:8788/api/main-quests | node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(0,'utf8'));console.log('quests',p.quests?.length)"
+curl -s "http://127.0.0.1:8788/api/quest?enUrl=https%3A%2F%2Fwutheringwaves.fandom.com%2Fwiki%2FUtterance_of_Marvels%3A_I&zhUrl=auto" | node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(0,'utf8'));const clips=(p.lines||[]).filter(l=>l.audioUrl);console.log({paired:p.meta?.pairedCount,audioCount:p.meta?.audioCount,firstAudioUrl:clips[0]?.audioUrl||null,hasLocalAudio:clips.some(l=>String(l.audioUrl||'').startsWith('/audio/'))})"
+```
+
+### 3) API catalogue + live quest parse checks
+
+- `/api/main-quests` should return a populated quest list.
+- `Utterance of Marvels: I` with `zhUrl=auto` should return paired lines and audio metadata.
+- Audio validation should be based on payload fields (`meta.audioCount`, line `audioUrl`, and whether any `audioUrl` starts with `/audio/`), not on a hard-coded filename.
+
+### 4) Production Pages smoke after deploy
+
+After `npm run deploy`, run the same route/API checks against the preview URL and the production alias:
+
+```bash
+BASE_URL=https://glearning.pages.dev
+curl -i "$BASE_URL/"
+curl -i "$BASE_URL/games/wuwa"
+curl -i "$BASE_URL/games/cyberpunk"
+curl -i "$BASE_URL/index.html"
+curl -i "$BASE_URL/audio/manifest.json"
+curl -s "$BASE_URL/api/main-quests" | node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(0,'utf8'));console.log('quests',p.quests?.length)"
+curl -s "$BASE_URL/api/quest?enUrl=https%3A%2F%2Fwutheringwaves.fandom.com%2Fwiki%2FUtterance_of_Marvels%3A_I&zhUrl=auto" | node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync(0,'utf8'));console.log({paired:p.meta?.pairedCount,audioCount:p.meta?.audioCount,lines:p.lines?.length})"
+```
+
+For the 2026-05-04 Plus closeout deploy, preview `https://6ef1b11f.glearning.pages.dev` and `https://glearning.pages.dev` both passed these checks.
+
+### 5) Manual UI smoke
+
+- Wuwa route shows live status; sample-game routes show honest sample/connector-planned status.
+- Sample/status honesty copy is visible where expected.
+- Audio controls behave honestly (available when clips exist; disabled/unavailable when clips do not).
+- Study/save/review/language-help flows still work.
+- Export panel shows P6 defer copy: TSV-only MVP; share cards/profiles/accounts/cloud sync/public pages deferred; saved/review data local to browser.
+- No visible profile/account/share controls that silently no-op.
+
 ## Regression Checks
 
 After UI or API changes, verify at least these production behaviors:
 
 - `/` returns the landing page.
 - `/games/wuwa` returns the live Wuthering Waves reader route.
-- `/games/cyberpunk` or another sample game route returns through the SPA fallback.
-- `/api/main-quests` returns 56 quests.
-- `Utterance of Marvels: I` with `zhUrl=auto` resolves to Kuro `万象新声·上`, includes local MP3 URLs, and keeps the first bundled MP3 at `/audio/vo-hlmq-xz-3-9.mp3`.
-- `Utterance of Marvels: II` with `zhUrl=auto` resolves to Kuro `万象新声·下`, with paired lines and local MP3 URLs.
+- `/games/cyberpunk` or another sample game route returns through the SPA fallback and is labeled as sample reader status (not live connector).
+- `/api/main-quests` returns a populated quest list.
+- `Utterance of Marvels: I` with `zhUrl=auto` resolves to Kuro `万象新声·上`, includes paired lines, and includes source/local audio URLs when available.
+- `Utterance of Marvels: II` with `zhUrl=auto` resolves to Kuro `万象新声·下`, with paired lines and local/source audio URLs when available.
 - Explicit BWIKI URLs still work for the default pair.
+- Per-line study state persists locally: reveal or master a line, reload the route, and confirm `localStorage` contains a `glearning-study-v1:*` key with the same played/revealed/mastered counts. Progress is browser-local and not account-synced.
+- Saved dialogue lines and glossary terms persist locally: save a line and a glossary term, change routes or reload, and confirm `localStorage.glearning-saves-v1` keeps those items separated by `gameId` and `questKey`. The ReaderDock saved count reflects the active game, while the Study panel list reflects the active quest.
+- Local saved-item review queue works without an account: after saving a line or glossary term, confirm it appears as due in the ReaderDock and Study panel because it has no `glearning-review-v1` state; use `Show answer` → `Again` and confirm the item is scheduled about 10 minutes out; reload and confirm `glearning-review-v1` persists; un-save the item and confirm its review-state entry is removed.
+- Contextual language help is local and deterministic: click `Language help` on a dialogue card, confirm the Study panel opens with the selected speaker/context, EN/ZH snippets, glossary matches when quest terms appear in the line, up to three grammar/reading hints, and `Clear language help`; confirm it does not change played/revealed/mastered/saved local state.
+- Audio MVP honesty: on a Wuthering Waves quest with bundled/source clips, `Audio only` remains available and filters to playable dialogue lines; on sample games or any quest with `audioCount=0`, topbar/Study/ReaderDock audio-only controls are disabled or labeled unavailable, and the reader does not become blank from a stale audio-only setting. Empty reader states should explain no audio clips, no audio lines matching filters, no dialogue matching filters, or no loaded dialogue as applicable.
+- Landing/reader honesty: Wuthering Waves is the only live source connector at launch; other games are sample-reader pages with real study-loop UX but no live source connector or playable source clips yet.
+- Voice practice is explicitly deferred for launch: there is no recording, pronunciation scoring, TTS, generated audio, or account-backed voice feature in the current MVP.
+- Planned controls are explicitly disabled/labeled (for example: `Daily timer planned`, `Saved list lives in reader; global page planned`, `Settings/profile planned`, and non-live chapter routing marked planned) so visible controls do not silently no-op.
 
 ## Content And Rights Note
 
@@ -194,8 +270,11 @@ GLearning fetches source pages on demand for personal study. Fandom, Kuro Wiki, 
 
 ## Roadmap
 
-- Add real connectors for more games after confirming source availability and rights constraints.
-- Add persisted saved words/bookmarks across game routes.
-- Add spaced review mode for glossary and saved lines.
+- Add real connectors for more games after confirming source availability and rights constraints; once added, update each game page from sample-reader status to live connector status.
+- Add a global saved-items page once saved lines/terms need cross-game browsing outside the reader.
+- Improve the existing local saved-item review queue with richer scheduling, quiz modes, and cross-device sync once accounts/cloud storage exist.
+- Keep launch export/share scope to TSV; defer share cards, profiles, accounts, cloud sync, and public progress pages.
+- Add voice recording and pronunciation scoring only after playback coverage, privacy, rights, and evaluation constraints are clear; current launch scope remains source-clip listening playback and only Wuthering Waves has connector-backed source authenticity/audio coverage.
+- Expand contextual language help beyond the local deterministic MVP with richer dictionary lookup and optional AI grammar parsing once source, cost, and accuracy constraints are clear.
 - Improve mobile reader ergonomics.
 - Add screenshots or short demo clips to the repository docs.
