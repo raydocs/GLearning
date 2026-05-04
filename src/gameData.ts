@@ -2,6 +2,20 @@
 // unique typography stack, and a `motif` flag the CSS uses to render
 // a per-game decoration (HUD frames, scan lines, hazard stripes, etc).
 
+type ConnectorCapabilities = {
+  questApi: boolean
+  questCatalog: boolean
+  sourceAudio: boolean
+}
+
+export type GameConnectorMetadata = {
+  status: 'live' | 'sample'
+  provider: string
+  label: string
+  capabilities: ConnectorCapabilities
+  note: string
+}
+
 export const GAMES = [
   {
     id: 'wuwa',
@@ -10,6 +24,13 @@ export const GAMES = [
     tagline: 'Resonance, recorded',
     cnTagline: '万象新声 · 余音可寻',
     studio: 'Kuro Games',
+    connector: {
+      status: 'live',
+      provider: 'wuthering-waves-wiki',
+      label: 'Wuwa live connector',
+      capabilities: { questApi: true, questCatalog: true, sourceAudio: true },
+      note: 'Live Wuthering Waves Fandom + Kuro/BWIKI quest pairing with bundled/source audio when available.',
+    } satisfies GameConnectorMetadata,
     glyph: 'W',
     motif: 'wuwa',
     serif: '"Cormorant Garamond", "Source Han Serif SC", serif',
@@ -60,6 +81,13 @@ export const GAMES = [
     tagline: 'Travel a world of seven elements',
     cnTagline: '七元素的旅程 · 提瓦特',
     studio: 'HoYoverse',
+    connector: {
+      status: 'sample',
+      provider: 'curated-sample',
+      label: 'Sample reader',
+      capabilities: { questApi: false, questCatalog: false, sourceAudio: false },
+      note: 'Curated sample study content only; no Genshin live source connector or playable source-audio connector exists yet.',
+    } satisfies GameConnectorMetadata,
     glyph: '原',
     motif: 'genshin',
     serif: '"Cinzel", "Source Han Serif SC", serif',
@@ -108,6 +136,13 @@ export const GAMES = [
     tagline: 'May this journey lead us starward',
     cnTagline: '愿此行 · 终抵群星',
     studio: 'HoYoverse',
+    connector: {
+      status: 'sample',
+      provider: 'curated-sample',
+      label: 'Sample reader',
+      capabilities: { questApi: false, questCatalog: false, sourceAudio: false },
+      note: 'Curated sample study content only; no Star Rail live source connector or playable source-audio connector exists yet.',
+    } satisfies GameConnectorMetadata,
     glyph: '星',
     motif: 'starrail',
     serif: '"Cormorant Garamond", "Source Han Serif SC", serif',
@@ -156,6 +191,13 @@ export const GAMES = [
     tagline: 'Welcome to New Eridu',
     cnTagline: '欢迎来到新艾利都',
     studio: 'HoYoverse',
+    connector: {
+      status: 'sample',
+      provider: 'curated-sample',
+      label: 'Sample reader',
+      capabilities: { questApi: false, questCatalog: false, sourceAudio: false },
+      note: 'Curated sample study content only; no Zenless Zone Zero live source connector or playable source-audio connector exists yet.',
+    } satisfies GameConnectorMetadata,
     glyph: 'Z',
     motif: 'zzz',
     serif: '"Bebas Neue", "Source Han Sans SC", sans-serif',
@@ -196,6 +238,13 @@ export const GAMES = [
     tagline: 'Doctor, Rhodes Island awaits',
     cnTagline: '博士 · 罗德岛在等候',
     studio: 'Hypergryph',
+    connector: {
+      status: 'sample',
+      provider: 'curated-sample',
+      label: 'Sample reader',
+      capabilities: { questApi: false, questCatalog: false, sourceAudio: false },
+      note: 'Curated sample study content only; no Arknights live source connector or playable source-audio connector exists yet.',
+    } satisfies GameConnectorMetadata,
     glyph: 'A',
     motif: 'arknights',
     serif: '"JetBrains Mono", monospace',
@@ -236,6 +285,13 @@ export const GAMES = [
     tagline: 'For all our beautiful tomorrows',
     cnTagline: '为了所有美好的明天',
     studio: 'HoYoverse',
+    connector: {
+      status: 'sample',
+      provider: 'curated-sample',
+      label: 'Sample reader',
+      capabilities: { questApi: false, questCatalog: false, sourceAudio: false },
+      note: 'Curated sample study content only; no Honkai Impact 3rd live source connector or playable source-audio connector exists yet.',
+    } satisfies GameConnectorMetadata,
     glyph: '崩',
     motif: 'honkai3',
     serif: '"Cormorant Garamond", "Source Han Serif SC", serif',
@@ -276,6 +332,13 @@ export const GAMES = [
     tagline: 'Wake the f*** up, samurai',
     cnTagline: '醒醒吧 · 武士',
     studio: 'CD Projekt Red',
+    connector: {
+      status: 'sample',
+      provider: 'curated-sample',
+      label: 'Sample reader',
+      capabilities: { questApi: false, questCatalog: false, sourceAudio: false },
+      note: 'Curated sample study content only; no Cyberpunk 2077 live source connector or playable source-audio connector exists yet.',
+    } satisfies GameConnectorMetadata,
     glyph: '⌬',
     motif: 'cyberpunk',
     serif: '"Bebas Neue", "Source Han Sans SC", sans-serif',
@@ -316,6 +379,13 @@ export const GAMES = [
     tagline: 'Toss a coin to your witcher',
     cnTagline: '丹德里恩的歌谣',
     studio: 'CD Projekt Red',
+    connector: {
+      status: 'sample',
+      provider: 'curated-sample',
+      label: 'Sample reader',
+      capabilities: { questApi: false, questCatalog: false, sourceAudio: false },
+      note: 'Curated sample study content only; no Witcher 3 live source connector or playable source-audio connector exists yet.',
+    } satisfies GameConnectorMetadata,
     glyph: '✦',
     motif: 'witcher3',
     serif: '"IM Fell English", "Source Han Serif SC", serif',
@@ -350,3 +420,27 @@ export const GAMES = [
     ],
   },
 ] as const;
+
+export type Game = (typeof GAMES)[number]
+export type GameId = Game['id']
+export type GameConnector = Game['connector']
+
+export function getGameById(gameId: string): Game {
+  return GAMES.find((game) => game.id === gameId) || GAMES[0]
+}
+
+export function getGameConnector(game: Game): GameConnector {
+  return game.connector
+}
+
+export function hasLiveQuestConnector(game: Game): boolean {
+  return game.connector.status === 'live' && game.connector.capabilities.questApi
+}
+
+export function hasQuestCatalogConnector(game: Game): boolean {
+  return game.connector.status === 'live' && game.connector.capabilities.questCatalog
+}
+
+export function hasSourceAudioConnector(game: Game): boolean {
+  return game.connector.status === 'live' && game.connector.capabilities.sourceAudio
+}

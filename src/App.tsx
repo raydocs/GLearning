@@ -1,27 +1,54 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
-import { GAMES } from './gameData'
+import {
+  GAMES,
+  getGameById,
+  getGameConnector,
+  hasLiveQuestConnector,
+  hasQuestCatalogConnector,
+  type Game,
+  type GameId,
+} from './gameData'
 import { buildLanguageHelp, type LanguageHelp } from './languageHelp'
+import {
+  DENSITY_STORAGE_KEY,
+  LOCAL_SNAPSHOT_VERSION,
+  REVIEW_AGAIN_MINUTES,
+  REVIEW_FIRST_KNOW_MINUTES,
+  REVIEW_MAX_KNOW_MINUTES,
+  buildLineStudyKeys,
+  buildLocalDataSnapshot,
+  countDueReviewItems,
+  getDueReviewItems,
+  getInitialDensity,
+  getLineSaveId,
+  getPaletteStorageKey,
+  getQuestStudyIdentity,
+  getReviewDueMs,
+  getTermSaveId,
+  isReviewDue,
+  readStoredReviewItems,
+  readStoredSaves,
+  readStoredStudyState,
+  writeStoredReviewItems,
+  writeStoredSaves,
+  writeStoredStudyState,
+  type DensityId,
+  type LineStudyState,
+  type ReviewGrade,
+  type ReviewItemState,
+  type SavedItem,
+} from './storage'
 import type { MainQuestCatalogResponse, MainQuestOption, PairConfidence, QuestLine, QuestResponse } from './types'
 
 const DEFAULT_EN_URL = 'https://wutheringwaves.fandom.com/wiki/Utterance_of_Marvels:_I'
 const DEFAULT_ZH_URL =
   'https://wiki.biligame.com/wutheringwaves/%E4%BB%BB%E5%8A%A1%E5%9B%9E%E9%A1%BE/%E4%B8%87%E8%B1%A1%E6%96%B0%E5%A3%B0%C2%B7%E4%B8%8A'
-const PALETTE_STORAGE_PREFIX = 'glearning-palette'
-const DENSITY_STORAGE_KEY = 'glearning-density'
-const STUDY_STORAGE_VERSION = 1
-const STUDY_STORAGE_PREFIX = `glearning-study-v${STUDY_STORAGE_VERSION}`
-const SAVES_STORAGE_KEY = 'glearning-saves-v1'
-const SAVES_STORAGE_VERSION = 1
-const REVIEW_STORAGE_KEY = 'glearning-review-v1'
-const REVIEW_STORAGE_VERSION = 1
-const REVIEW_AGAIN_MINUTES = 10
-const REVIEW_FIRST_KNOW_MINUTES = 60 * 24
-const REVIEW_MAX_KNOW_MINUTES = 60 * 24 * 30
 const LIVE_GAME_ID = 'wuwa'
 
 const RIGHT_TABS = [
   { id: 'summary', label: 'Summary', note: 'Quest progress and source health.' },
   { id: 'study', label: 'Study', note: 'Search, speaker filter, glossary, and reveal mode.' },
+  { id: 'voice', label: 'Voice', note: 'Mic-free shadow practice: listen, chunk, repeat privately.' },
   { id: 'sources', label: 'Sources', note: 'Swap English and Chinese wiki sources.' },
   { id: 'export', label: 'Export', note: 'Download Anki TSV and open source pages.' },
 ] as const
@@ -30,97 +57,22 @@ const DENSITIES = [
   { id: 'compact', label: '紧凑' },
   { id: 'standard', label: '标准' },
   { id: 'spacious', label: '宽松' },
-] as const
+] as const satisfies readonly { id: DensityId; label: string }[]
 
-type Game = (typeof GAMES)[number]
-type GameId = Game['id']
-type DensityId = (typeof DENSITIES)[number]['id']
 type RightTabId = (typeof RIGHT_TABS)[number]['id']
 type LineStudyStatus = 'unread' | 'heard' | 'mastered'
 type AppRoute =
   | { page: 'home' }
   | { page: 'game'; gameId: GameId }
   | { page: 'saved' }
+  | { page: 'demo' }
 
-type LineStudyState = {
-  revealedAt?: string
-  firstPlayedAt?: string
-  lastPlayedAt?: string
-  playCount?: number
-  masteredAt?: string
-}
-
-type StoredQuestStudyState = {
-  version: typeof STUDY_STORAGE_VERSION
-  gameId: string
-  questKey: string
-  updatedAt: string
-  lines: Record<string, LineStudyState>
-}
-
-type SavedLineItem = {
-  type: 'line'
-  id: string
-  gameId: string
-  questKey: string
-  lineKey: string
-  lineId: string
-  speakerEn: string
-  speakerZh: string
-  en: string
-  zh: string
-  questTitle?: string
-  questZhTitle?: string
-  sourceEnUrl?: string
-  sourceZhUrl?: string
-  savedAt: string
-  updatedAt: string
-}
-
-type SavedTermItem = {
-  type: 'term'
-  id: string
-  gameId: string
-  questKey: string
-  en: string
-  zh: string
-  questTitle?: string
-  questZhTitle?: string
-  sourceEnUrl?: string
-  sourceZhUrl?: string
-  savedAt: string
-  updatedAt: string
-}
-
-type SavedItem = SavedLineItem | SavedTermItem
-
-type StoredSavedItems = {
-  version: typeof SAVES_STORAGE_VERSION
-  updatedAt: string
-  items: Record<string, SavedItem>
-}
-
-type ReviewGrade = 'again' | 'know'
-
-type ReviewItemState = {
-  dueAt: string
-  intervalMinutes: number
-  reviewedAt?: string
-  lastGrade?: ReviewGrade
-}
-
-type StoredReviewItems = {
-  version: typeof REVIEW_STORAGE_VERSION
-  updatedAt: string
-  items: Record<string, ReviewItemState>
+type LocalSnapshotNotice = {
+  tone: 'success' | 'error'
+  message: string
 }
 
 type GlossaryTerm = QuestResponse['terms'][number]
-
-type QuestStudyIdentity = {
-  questKey: string
-  storageKey: string
-}
 
 type ReaderStats = {
   progress: number
@@ -135,13 +87,23 @@ type ReaderStats = {
   studyProgress: number
 }
 
+type ShadowPracticeChunk = {
+  id: string
+  label: string
+  text: string
+  cue: string
+}
+
 function App() {
   const [route, setRoute] = useState<AppRoute>(() => getInitialRoute())
   const isReaderRoute = route.page === 'game'
   const activeGame = useMemo(() => getGame(isReaderRoute ? route.gameId : LIVE_GAME_ID), [isReaderRoute, route])
   const isHome = route.page === 'home'
   const isSavedRoute = route.page === 'saved'
-  const isLiveGame = isReaderRoute && activeGame.id === LIVE_GAME_ID
+  const isDemoRoute = route.page === 'demo'
+  const activeConnector = getGameConnector(activeGame)
+  const isLiveGame = isReaderRoute && hasLiveQuestConnector(activeGame)
+  const canLoadQuestCatalog = isReaderRoute && hasQuestCatalogConnector(activeGame)
   const [enUrl, setEnUrl] = useState(DEFAULT_EN_URL)
   const [zhUrl, setZhUrl] = useState(DEFAULT_ZH_URL)
   const [questCatalog, setQuestCatalog] = useState<MainQuestOption[]>([])
@@ -151,6 +113,8 @@ function App() {
   const [density, setDensity] = useState<DensityId>(() => getInitialDensity())
   const [sidePanel, setSidePanel] = useState<RightTabId>('summary')
   const [selectedHelpLineId, setSelectedHelpLineId] = useState('')
+  const [selectedVoiceLineId, setSelectedVoiceLineId] = useState('')
+  const [voiceRepCountsByLineId, setVoiceRepCountsByLineId] = useState<Record<string, number>>({})
   const [quest, setQuest] = useState<QuestResponse | null>(null)
   const [error, setError] = useState('')
   const [isLoading, setIsLoading] = useState(false)
@@ -163,6 +127,7 @@ function App() {
   const [savedItemsById, setSavedItemsById] = useState<Record<string, SavedItem>>(() => readStoredSaves()?.items || {})
   const [reviewItemsById, setReviewItemsById] = useState<Record<string, ReviewItemState>>(() => readStoredReviewItems()?.items || {})
   const [reviewNowMs, setReviewNowMs] = useState(() => Date.now())
+  const [localSnapshotNotice, setLocalSnapshotNotice] = useState<LocalSnapshotNotice | null>(null)
 
   const activePalette = activeGame.palettes.find((palette) => palette.id === paletteId) || activeGame.palettes[0]
   const readerData = useMemo(() => (isReaderRoute ? (isLiveGame ? quest : createSampleQuest(activeGame)) : null), [activeGame, isLiveGame, isReaderRoute, quest])
@@ -194,8 +159,14 @@ function App() {
   )
   const savedTermIds = useMemo(() => new Set(activeQuestSavedItems.filter((item) => item.type === 'term').map((item) => item.id)), [activeQuestSavedItems])
   const selectedLanguageHelp = useMemo(() => (readerData ? buildLanguageHelp(readerData, selectedHelpLineId) : null), [readerData, selectedHelpLineId])
+  const selectedVoiceLine = useMemo(
+    () => readerData?.lines.find((line) => line.id === selectedVoiceLineId) || null,
+    [readerData, selectedVoiceLineId],
+  )
 
   async function loadQuest(nextEnUrl = enUrl, nextZhUrl = zhUrl) {
+    if (!isReaderRoute || !hasLiveQuestConnector(activeGame)) return
+
     setIsLoading(true)
     setError('')
 
@@ -214,6 +185,8 @@ function App() {
       setSelectedQuestUrl(payload.source.enUrl)
       setSearch('')
       setSpeaker('all')
+      setSelectedVoiceLineId('')
+      setVoiceRepCountsByLineId({})
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Unknown loading error')
       setQuest(null)
@@ -240,6 +213,12 @@ function App() {
 
   useEffect(() => {
     async function loadCatalog() {
+      if (!canLoadQuestCatalog) {
+        setQuestCatalog([])
+        setCatalogError('')
+        return
+      }
+
       try {
         const response = await fetch('/api/main-quests')
         const payload = (await response.json()) as MainQuestCatalogResponse & { error?: string }
@@ -251,7 +230,7 @@ function App() {
     }
 
     void loadCatalog()
-  }, [])
+  }, [canLoadQuestCatalog])
 
   useEffect(() => {
     setPaletteId(getInitialPalette(activeGame))
@@ -302,12 +281,14 @@ function App() {
   }, [activeGame.id, lineStudyByKey, loadedStudyStorageKey, questStudyIdentity])
 
   useEffect(() => {
+    if (isDemoRoute) return
     writeStoredSaves(savedItemsById)
-  }, [savedItemsById])
+  }, [isDemoRoute, savedItemsById])
 
   useEffect(() => {
+    if (isDemoRoute) return
     writeStoredReviewItems(reviewItemsById)
-  }, [reviewItemsById])
+  }, [isDemoRoute, reviewItemsById])
 
   useEffect(() => {
     const timer = window.setInterval(() => setReviewNowMs(Date.now()), 60 * 1000)
@@ -324,6 +305,8 @@ function App() {
 
   useEffect(() => {
     setSelectedHelpLineId('')
+    setSelectedVoiceLineId('')
+    setVoiceRepCountsByLineId({})
   }, [activeGame.id, questStudyIdentity?.questKey])
 
   useEffect(() => {
@@ -332,6 +315,13 @@ function App() {
       setSelectedHelpLineId('')
     }
   }, [readerData, selectedHelpLineId])
+
+  useEffect(() => {
+    if (!selectedVoiceLineId || !readerData) return
+    if (!readerData.lines.some((line) => line.id === selectedVoiceLineId)) {
+      setSelectedVoiceLineId('')
+    }
+  }, [readerData, selectedVoiceLineId])
 
   useEffect(() => {
     if (readerData && audioOnly && !hasQuestAudio) {
@@ -365,6 +355,14 @@ function App() {
       const { masteredAt, ...rest } = current
       return masteredAt ? rest : { ...current, masteredAt: now }
     })
+  }
+
+  function countVoiceRep(lineId: string) {
+    if (!lineId) return
+    setVoiceRepCountsByLineId((current) => ({
+      ...current,
+      [lineId]: (current[lineId] || 0) + 1,
+    }))
   }
 
   function toggleSavedLine(line: QuestLine, lineKey: string | undefined) {
@@ -574,15 +572,48 @@ function App() {
     resetReaderControls()
   }
 
+  function exportLocalSnapshot() {
+    try {
+      const snapshot = buildLocalDataSnapshot(savedItemsById, reviewItemsById)
+      const blob = new Blob([`${JSON.stringify(snapshot, null, 2)}\n`], { type: 'application/json;charset=utf-8' })
+      const link = document.createElement('a')
+      link.href = URL.createObjectURL(blob)
+      link.download = `glearning-local-snapshot-v${snapshot.version}-${snapshot.exportedAt.replace(/[:.]/g, '-')}.json`
+      link.click()
+      URL.revokeObjectURL(link.href)
+      setLocalSnapshotNotice({
+        tone: 'success',
+        message: `Downloaded local snapshot v${snapshot.version}: ${snapshot.counts.savedItems} saved, ${snapshot.counts.reviewItems} reviews, ${snapshot.counts.studyStates} study states.`,
+      })
+    } catch (caught) {
+      setLocalSnapshotNotice({
+        tone: 'error',
+        message: caught instanceof Error ? caught.message : 'Unable to export this browser-local snapshot.',
+      })
+    }
+  }
+
+  function navigateToDemo() {
+    window.history.pushState({}, '', '/demo')
+    setRoute({ page: 'demo' })
+    resetReaderControls()
+  }
+
   function resetReaderControls() {
     setSearch('')
     setSpeaker('all')
     setAudioOnly(false)
     setHideChinese(false)
+    setSelectedVoiceLineId('')
+    setVoiceRepCountsByLineId({})
   }
 
   if (isHome) {
-    return <HomePage games={GAMES} onOpenGame={navigateToGame} onOpenSaved={navigateToSaved} />
+    return <HomePage games={GAMES} onOpenGame={navigateToGame} onOpenSaved={navigateToSaved} onOpenDemo={navigateToDemo} />
+  }
+
+  if (isDemoRoute) {
+    return <DemoPage games={GAMES} onHome={navigateHome} onOpenGame={navigateToGame} onOpenSaved={navigateToSaved} />
   }
 
   if (isSavedRoute) {
@@ -596,6 +627,8 @@ function App() {
         onOpenGame={navigateToGame}
         onGradeReview={gradeSavedReview}
         onRemoveSavedItem={removeSavedItem}
+        onExportLocalSnapshot={exportLocalSnapshot}
+        localSnapshotNotice={localSnapshotNotice}
       />
     )
   }
@@ -698,7 +731,7 @@ function App() {
             <section className="source-panel">
               <h4>Sources <span className="pill">sample</span></h4>
               <p className="sample-note">
-                This game page uses curated sample dialogue and glossary data. Reader/save/review/export/language-help flows are real; live source and playable-audio connectors are planned.
+                {activeConnector.note} Reader/save/review/export/language-help flows are real; live source and playable-audio connectors are planned.
               </p>
             </section>
           )}
@@ -779,7 +812,7 @@ function App() {
           <div className="rail-footnote">
             <b>{isLiveGame ? '真实数据源' : 'Prototype page'}</b><br />
             {isLiveGame
-              ? 'English from Fandom MediaWiki · Chinese auto pairs from Kuro Wiki · MP3 preferred when bundled.'
+              ? activeConnector.note
               : `${activeGame.name} uses curated sample study content today; live source and playable audio connectors are planned.`}
           </div>
         </aside>
@@ -858,6 +891,11 @@ function App() {
                             setSelectedHelpLineId(line.id)
                             setSidePanel('study')
                           }}
+                          isVoiceOpen={selectedVoiceLineId === line.id && sidePanel === 'voice'}
+                          onOpenVoicePractice={() => {
+                            setSelectedVoiceLineId(line.id)
+                            setSidePanel('voice')
+                          }}
                         />
                       )
                     })
@@ -915,6 +953,20 @@ function App() {
               onClearLanguageHelp={() => setSelectedHelpLineId('')}
             />
           )}
+          {readerData && sidePanel === 'voice' && (
+            <VoicePracticePanel
+              quest={readerData}
+              selectedLine={selectedVoiceLine}
+              selectedLineRepCount={selectedVoiceLine ? voiceRepCountsByLineId[selectedVoiceLine.id] || 0 : 0}
+              onPickLine={(lineId) => setSelectedVoiceLineId(lineId)}
+              onClearLine={() => setSelectedVoiceLineId('')}
+              onCountRep={countVoiceRep}
+              onPlayed={() => {
+                if (!selectedVoiceLine) return
+                markLinePlayed(lineStudyKeys[selectedVoiceLine.id])
+              }}
+            />
+          )}
           {sidePanel === 'sources' && isLiveGame && (
             <SourcesPanel
               enUrl={enUrl}
@@ -953,14 +1005,16 @@ function HomePage({
   games,
   onOpenGame,
   onOpenSaved,
+  onOpenDemo,
 }: {
   games: readonly Game[]
   onOpenGame: (gameId: GameId) => void
   onOpenSaved: () => void
+  onOpenDemo: () => void
 }) {
   const [selectedGameId, setSelectedGameId] = useState<GameId>('starrail')
   const selectedGame = getGame(selectedGameId)
-  const isSelectedLiveGame = selectedGame.id === LIVE_GAME_ID
+  const isSelectedLiveGame = hasLiveQuestConnector(selectedGame)
   const selectedPalette = selectedGame.palettes[0]
 
   useEffect(() => {
@@ -1018,6 +1072,9 @@ function HomePage({
               <button className="mini-btn home-ghost" type="button" onClick={() => document.querySelector('.game-grid')?.scrollIntoView({ behavior: 'smooth' })}>
                 浏览所有章节
               </button>
+              <button className="mini-btn home-demo-link" type="button" onClick={onOpenDemo}>
+                Reviewer demo → honest walkthrough
+              </button>
             </div>
             <div className="landing-stats" aria-label="Study stats">
               {isSelectedLiveGame ? (
@@ -1036,7 +1093,7 @@ function HomePage({
             </div>
           </div>
           <button className="home-poster" type="button" onClick={() => onOpenGame(selectedGame.id)}>
-            <span className="poster-badge">{selectedGame.id === LIVE_GAME_ID ? 'live API' : selectedGame.palettes[0].name}</span>
+            <span className="poster-badge">{isSelectedLiveGame ? 'live API' : selectedGame.palettes[0].name}</span>
             <span className="poster-glyph">{selectedGame.glyph}</span>
             <span className="poster-frame" />
             <span className="poster-ornaments" aria-hidden="true">
@@ -1063,7 +1120,7 @@ function HomePage({
                   <span className="game-card-progress">
                     <i style={{ width: `${Math.round(game.chapters[0].progress * 100)}%` }} />
                   </span>
-                  <span className="game-card-meta">{game.chapters.length} chapters · {game.glossary.length} terms · {game.id === LIVE_GAME_ID ? 'live Wuwa connector' : 'sample reader · connector planned'}</span>
+                  <span className="game-card-meta">{game.chapters.length} chapters · {game.glossary.length} terms · {hasLiveQuestConnector(game) ? getGameConnector(game).label : 'sample reader · connector planned'}</span>
                 </span>
               </button>
             </article>
@@ -1094,6 +1151,109 @@ function HomePage({
   )
 }
 
+function DemoPage({
+  games,
+  onHome,
+  onOpenGame,
+  onOpenSaved,
+}: {
+  games: readonly Game[]
+  onHome: () => void
+  onOpenGame: (gameId: GameId) => void
+  onOpenSaved: () => void
+}) {
+  const wuwa = getGame(LIVE_GAME_ID)
+  const sampleGame = games.find((game) => game.id === 'cyberpunk') || games.find((game) => !hasLiveQuestConnector(game)) || wuwa
+
+  return (
+    <>
+      <header className="topbar demo-topbar">
+        <div className="brand">
+          <div className="brand-mark">D</div>
+          <div className="brand-text">
+            <div className="brand-name">GLearning · Demo</div>
+            <div className="brand-sub">static reviewer route · no new claims</div>
+          </div>
+        </div>
+        <nav className="demo-nav" aria-label="Demo shortcuts">
+          <button className="mini-btn" type="button" onClick={onHome}>Home</button>
+          <button className="mini-btn" type="button" onClick={() => onOpenGame(LIVE_GAME_ID)}>Wuwa live</button>
+          <button className="mini-btn" type="button" onClick={() => onOpenGame(sampleGame.id)}>Sample reader</button>
+          <button className="mini-btn" type="button" onClick={onOpenSaved}>Saved library</button>
+        </nav>
+      </header>
+
+      <main className="demo-page" aria-labelledby="demo-title">
+        <LandingBackdrop game={wuwa} />
+        <section className="demo-hero">
+          <div>
+            <div className="home-kicker">● Static launch demo · reviewer honesty route</div>
+            <h1 id="demo-title">Launch Demo Route MVP</h1>
+            <p>
+              A short, production-safe walkthrough of what is real today: Wuwa live reader, non-Wuwa sample readers,
+              browser-local saved/review library, TSV export, mic-free shadow practice, and the account/cloud/profile/share-card work that remains deferred.
+            </p>
+          </div>
+          <div className="demo-honesty-card" aria-label="Demo safety notes">
+            <b>No demo fetches</b>
+            <span>This page is static; it does not load quest APIs or write saved/review data. Existing theme effects may still set app palette preferences.</span>
+          </div>
+        </section>
+
+        <section className="demo-grid" aria-label="Demo walkthrough cards">
+          <article className="demo-card primary">
+            <span className="demo-step">01</span>
+            <h2>Wuwa live reader</h2>
+            <p>
+              Wuthering Waves is the only live connector today: Fandom English + Kuro/BWIKI Chinese pairing, source-aware lines,
+              bundled/source audio where available, study controls, language help, and TSV export.
+            </p>
+            <button className="primary-btn" type="button" onClick={() => onOpenGame(LIVE_GAME_ID)}>Open Wuwa live reader</button>
+          </article>
+
+          <article className="demo-card">
+            <span className="demo-step">02</span>
+            <h2>Non-Wuwa sample reader</h2>
+            <p>
+              Other game pages are honest sample readers. Reading, save/review, export, and local language-help UX are real, but they do not claim a live connector or playable source clips yet.
+            </p>
+            <button className="mini-btn" type="button" onClick={() => onOpenGame(sampleGame.id)}>Open {sampleGame.name} sample</button>
+          </article>
+
+          <article className="demo-card">
+            <span className="demo-step">03</span>
+            <h2>Local saved/review library</h2>
+            <p>
+              Saved lines, saved terms, and the first due review card live in browser-local storage. There is no login, profile, cloud sync, or public progress page in this launch lane.
+            </p>
+            <button className="mini-btn" type="button" onClick={onOpenSaved}>Open /saved</button>
+          </article>
+
+          <article className="demo-card">
+            <span className="demo-step">04</span>
+            <h2>TSV export, not social share</h2>
+            <p>
+              The Export panel downloads a TSV for Anki/spreadsheets. Share cards, profiles, accounts, cloud sync, and public pages are intentionally deferred until those systems exist.
+            </p>
+          </article>
+
+          <article className="demo-card deferred">
+            <span className="demo-step">05</span>
+            <h2>Voice safety boundaries</h2>
+            <ul>
+              <li>Mic-free shadow practice is real in the reader Voice tab.</li>
+              <li>No microphone, recording, upload, speech recognition, pronunciation score, TTS, or generated audio.</li>
+              <li>Account/profile/cloud sync: deferred.</li>
+              <li>Share cards/public pages: deferred.</li>
+              <li>Non-Wuwa live connectors: planned, not claimed.</li>
+            </ul>
+          </article>
+        </section>
+      </main>
+    </>
+  )
+}
+
 function GameTabs({ activeGame, onPick }: { activeGame: Game; onPick: (gameId: GameId) => void }) {
   return (
     <nav className="game-tabs" aria-label="Game pages">
@@ -1116,6 +1276,8 @@ function GlobalSavedPage({
   onOpenGame,
   onGradeReview,
   onRemoveSavedItem,
+  onExportLocalSnapshot,
+  localSnapshotNotice,
 }: {
   games: readonly Game[]
   savedItems: SavedItem[]
@@ -1125,6 +1287,8 @@ function GlobalSavedPage({
   onOpenGame: (gameId: GameId) => void
   onGradeReview: (itemId: string, grade: ReviewGrade) => void
   onRemoveSavedItem: (itemId: string) => void
+  onExportLocalSnapshot: () => void
+  localSnapshotNotice: LocalSnapshotNotice | null
 }) {
   const [gameFilter, setGameFilter] = useState<'all' | GameId>('all')
   const [kindFilter, setKindFilter] = useState<'all' | SavedItem['type']>('all')
@@ -1232,37 +1396,53 @@ function GlobalSavedPage({
 
           <section className="panel saved-filter-panel">
             <h4>Browse saved · 筛选 <span className="pill">{filteredItems.length}</span></h4>
-            <div className="saved-filter-row">
-              <label className="search-field">
-                <span>Search</span>
-                <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="speaker, quest, English, 中文..." />
-              </label>
-              <label className="search-field">
-                <span>Game</span>
-                <select value={gameFilter} onChange={(event) => setGameFilter(event.target.value as 'all' | GameId)}>
-                  <option value="all">All games</option>
-                  {games.map((game) => (
-                    <option key={game.id} value={game.id}>{game.name} · {game.cn}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="search-field">
-                <span>Type</span>
-                <select value={kindFilter} onChange={(event) => setKindFilter(event.target.value as 'all' | SavedItem['type'])}>
-                  <option value="all">All</option>
-                  <option value="line">Lines</option>
-                  <option value="term">Terms</option>
-                </select>
-              </label>
-              <label className="search-field">
-                <span>Due</span>
-                <select value={dueFilter} onChange={(event) => setDueFilter(event.target.value as 'all' | 'due')}>
-                  <option value="all">All saved</option>
-                  <option value="due">Due now</option>
-                </select>
-              </label>
+          <div className="saved-filter-row">
+            <label className="search-field">
+              <span>Search</span>
+              <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="speaker, quest, English, 中文..." />
+            </label>
+            <label className="search-field">
+              <span>Game</span>
+              <select value={gameFilter} onChange={(event) => setGameFilter(event.target.value as 'all' | GameId)}>
+                <option value="all">All games</option>
+                {games.map((game) => (
+                  <option key={game.id} value={game.id}>{game.name} · {game.cn}</option>
+                ))}
+              </select>
+            </label>
+            <label className="search-field">
+              <span>Type</span>
+              <select value={kindFilter} onChange={(event) => setKindFilter(event.target.value as 'all' | SavedItem['type'])}>
+                <option value="all">All</option>
+                <option value="line">Lines</option>
+                <option value="term">Terms</option>
+              </select>
+            </label>
+            <label className="search-field">
+              <span>Due</span>
+              <select value={dueFilter} onChange={(event) => setDueFilter(event.target.value as 'all' | 'due')}>
+                <option value="all">All saved</option>
+                <option value="due">Due now</option>
+              </select>
+            </label>
             </div>
           </section>
+        </section>
+
+        <section className="panel saved-snapshot-panel" aria-labelledby="saved-snapshot-title">
+          <div>
+            <h4 id="saved-snapshot-title">Local data snapshot · 本地 JSON <span className="pill">v{LOCAL_SNAPSHOT_VERSION}</span></h4>
+            <p>
+              Download a versioned JSON copy of existing GLearning data in this browser: sanitized saved items, review schedule, study-state keys, and lightweight theme/density preferences.
+            </p>
+            <p className="snapshot-boundary">
+              Local export only: no account, no cloud sync, no public profile, no share cards, and no restore/import yet.
+            </p>
+            {localSnapshotNotice && <p className={`snapshot-notice ${localSnapshotNotice.tone}`} role="status">{localSnapshotNotice.message}</p>}
+          </div>
+          <button className="primary-btn snapshot-export-btn" type="button" onClick={onExportLocalSnapshot}>
+            Download local JSON snapshot
+          </button>
         </section>
 
         <section className="global-saved-list" aria-label="Global saved items">
@@ -1613,7 +1793,7 @@ function StudyPanel({
             : 'Audio-only unavailable · this sample has no playable clips yet.'}
         </p>
         <p className="voice-honesty-note">
-          Voice practice is deferred for launch; current MVP is listening playback from available source clips.
+          Voice tab is mic-free shadow practice only: source playback when available, deterministic chunks, and session-only repetition counts.
         </p>
         <div className="toggle-line">
           <span>Hide Chinese first · 点击单句显示中文</span>
@@ -1696,6 +1876,107 @@ function StudyPanel({
               </div>
             )
           })}
+        </div>
+      </section>
+    </>
+  )
+}
+
+function VoicePracticePanel({
+  quest,
+  selectedLine,
+  selectedLineRepCount,
+  onPickLine,
+  onClearLine,
+  onCountRep,
+  onPlayed,
+}: {
+  quest: QuestResponse
+  selectedLine: QuestLine | null
+  selectedLineRepCount: number
+  onPickLine: (lineId: string) => void
+  onClearLine: () => void
+  onCountRep: (lineId: string) => void
+  onPlayed: () => void
+}) {
+  const practiceQueue = quest.lines.filter((line) => line.en || line.zh).slice(0, 8)
+  const chunks = selectedLine ? buildShadowPracticeChunks(selectedLine) : []
+
+  return (
+    <>
+      <section className="panel voice-practice-panel" aria-live="polite">
+        <h4>Voice · Shadow practice <span className="pill">mic-free</span></h4>
+        <p className="voice-boundary-copy">
+          No microphone, no recording, no upload, no browser speech recognition, no pronunciation score, and no TTS or generated audio.
+        </p>
+
+        {selectedLine ? (
+          <div className="shadow-card">
+            <div className="shadow-line-head">
+              <span>{selectedLine.speakerEn || selectedLine.speakerZh || 'Narration'}</span>
+              <button className="mini-btn" type="button" onClick={onClearLine}>Clear</button>
+            </div>
+            <p className="shadow-line-en">{selectedLine.en || selectedLine.zh}</p>
+            {selectedLine.zh && <p className="shadow-line-zh">{selectedLine.zh}</p>}
+
+            {selectedLine.audioUrl ? (
+              <div className="voice-source-player" aria-label="Source clip player for shadow practice">
+                <VoicePlayer line={selectedLine} onPlayed={onPlayed} />
+                <p>Source clip only. Listen once, pause, then repeat aloud privately.</p>
+              </div>
+            ) : (
+              <p className="voice-no-audio">
+                No source clip is available for this line. GLearning will not generate audio, synthesize TTS, record you, or score pronunciation.
+              </p>
+            )}
+
+            <ol className="shadow-steps">
+              <li><b>Listen/read</b><span>Notice rhythm and pauses; use source audio only when the line has a clip.</span></li>
+              <li><b>Chunk</b><span>Practice one short chunk at a time before joining the full line.</span></li>
+              <li><b>Repeat aloud</b><span>Speak privately off-device; this counter is session-only and is not saved.</span></li>
+            </ol>
+
+            <div className="shadow-chunks" aria-label="Deterministic shadow practice chunks">
+              {chunks.map((chunk) => (
+                <div className="shadow-chunk" key={chunk.id}>
+                  <span>{chunk.label}</span>
+                  <b>{chunk.text}</b>
+                  <small>{chunk.cue}</small>
+                </div>
+              ))}
+            </div>
+
+            <div className="shadow-rep-row">
+              <button className="primary-btn shadow-rep-btn" type="button" onClick={() => onCountRep(selectedLine.id)}>
+                I repeated this line aloud
+              </button>
+              <span>Session reps: <b>{selectedLineRepCount}</b></span>
+            </div>
+          </div>
+        ) : (
+          <div className="shadow-empty">
+            <b>Pick a line to start.</b>
+            <p>Use <b>Shadow practice</b> on any dialogue card. The right rail will help you listen if a source clip exists, chunk the text, and count private repetitions for this session only.</p>
+          </div>
+        )}
+      </section>
+
+      <section className="panel voice-queue-panel">
+        <h4>Practice queue · 影子跟读 <span className="pill">{practiceQueue.length}</span></h4>
+        <div className="voice-line-list" aria-label="Quick shadow practice line picker">
+          {practiceQueue.map((line) => (
+            <button
+              key={line.id}
+              className={`voice-line-pick ${selectedLine?.id === line.id ? 'is-on' : ''}`}
+              type="button"
+              aria-pressed={selectedLine?.id === line.id}
+              onClick={() => onPickLine(line.id)}
+            >
+              <span>{line.speakerEn || line.speakerZh || 'Narration'} · #{line.id}</span>
+              <b>{line.en || line.zh}</b>
+              <small>{line.audioUrl ? 'source audio available' : 'no source clip · no generated audio'}</small>
+            </button>
+          ))}
         </div>
       </section>
     </>
@@ -1860,7 +2141,7 @@ function ExportPanel({ quest, exportTsv, isLive }: { quest: QuestResponse; expor
 }
 
 function getGame(gameId: string) {
-  return GAMES.find((game) => game.id === gameId) || GAMES[0]
+  return getGameById(gameId)
 }
 
 function getInitialRoute(): AppRoute {
@@ -1871,6 +2152,7 @@ function getInitialRoute(): AppRoute {
 function getRoute(): AppRoute {
   const path = window.location.pathname
   const hash = window.location.hash
+  if (/^\/demo\/?$/.test(path) || /^#\/?demo\/?$/.test(hash)) return { page: 'demo' }
   if (/^\/saved\/?$/.test(path) || /^#\/?saved\/?$/.test(hash)) return { page: 'saved' }
 
   const pathMatch = path.match(/^\/games\/([^/?#]+)/)
@@ -1887,186 +2169,6 @@ function getInitialPalette(game: Game) {
   return game.palettes.some((palette) => palette.id === savedPalette) ? savedPalette || game.palettes[0].id : game.palettes[0].id
 }
 
-function getPaletteStorageKey(gameId: string) {
-  return `${PALETTE_STORAGE_PREFIX}-${gameId}`
-}
-
-function getQuestStudyIdentity(gameId: string, quest: QuestResponse): QuestStudyIdentity {
-  const questKey = hashString([gameId, quest.source.enUrl, quest.source.zhUrl, quest.meta.enTitle].join('|'))
-  return {
-    questKey,
-    storageKey: `${STUDY_STORAGE_PREFIX}:${gameId}:${questKey}`,
-  }
-}
-
-function buildLineStudyKeys(lines: QuestLine[]) {
-  const seen = new Map<string, number>()
-  const keys: Record<string, string> = {}
-
-  lines.forEach((line) => {
-    const speaker = line.speakerEn || line.speakerZh || ''
-    const text = line.en || line.zh || ''
-    const baseKey = hashString([line.type, speaker, text].join('|'))
-    const occurrence = seen.get(baseKey) || 0
-    seen.set(baseKey, occurrence + 1)
-    keys[line.id] = `${baseKey}:${occurrence}`
-  })
-
-  return keys
-}
-
-function readStoredStudyState(storageKey: string): StoredQuestStudyState | null {
-  if (typeof window === 'undefined') return null
-
-  try {
-    const raw = window.localStorage.getItem(storageKey)
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as Partial<StoredQuestStudyState>
-    if (parsed.version !== STUDY_STORAGE_VERSION || !parsed.lines || typeof parsed.lines !== 'object') {
-      return null
-    }
-
-    return {
-      version: STUDY_STORAGE_VERSION,
-      gameId: typeof parsed.gameId === 'string' ? parsed.gameId : '',
-      questKey: typeof parsed.questKey === 'string' ? parsed.questKey : '',
-      updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : '',
-      lines: sanitizeStudyLines(parsed.lines),
-    }
-  } catch (caught) {
-    console.warn('Unable to read GLearning study state.', caught)
-    return null
-  }
-}
-
-function writeStoredStudyState(storageKey: string, gameId: string, questKey: string, lines: Record<string, LineStudyState>) {
-  if (typeof window === 'undefined') return
-
-  try {
-    const payload: StoredQuestStudyState = {
-      version: STUDY_STORAGE_VERSION,
-      gameId,
-      questKey,
-      updatedAt: new Date().toISOString(),
-      lines,
-    }
-    window.localStorage.setItem(storageKey, JSON.stringify(payload))
-  } catch (caught) {
-    console.warn('Unable to persist GLearning study state.', caught)
-  }
-}
-
-function readStoredSaves(): StoredSavedItems | null {
-  if (typeof window === 'undefined') return null
-
-  try {
-    const raw = window.localStorage.getItem(SAVES_STORAGE_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as Partial<StoredSavedItems>
-    if (parsed.version !== SAVES_STORAGE_VERSION || !parsed.items || typeof parsed.items !== 'object') {
-      return null
-    }
-
-    return {
-      version: SAVES_STORAGE_VERSION,
-      updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : '',
-      items: sanitizeSavedItems(parsed.items),
-    }
-  } catch (caught) {
-    console.warn('Unable to read GLearning saved items.', caught)
-    return null
-  }
-}
-
-function writeStoredSaves(items: Record<string, SavedItem>) {
-  if (typeof window === 'undefined') return
-
-  try {
-    const payload: StoredSavedItems = {
-      version: SAVES_STORAGE_VERSION,
-      updatedAt: new Date().toISOString(),
-      items,
-    }
-    window.localStorage.setItem(SAVES_STORAGE_KEY, JSON.stringify(payload))
-  } catch (caught) {
-    console.warn('Unable to persist GLearning saved items.', caught)
-  }
-}
-
-function readStoredReviewItems(): StoredReviewItems | null {
-  if (typeof window === 'undefined') return null
-
-  try {
-    const raw = window.localStorage.getItem(REVIEW_STORAGE_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw) as Partial<StoredReviewItems>
-    if (parsed.version !== REVIEW_STORAGE_VERSION || !parsed.items || typeof parsed.items !== 'object') {
-      return null
-    }
-
-    return {
-      version: REVIEW_STORAGE_VERSION,
-      updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : '',
-      items: sanitizeReviewItems(parsed.items),
-    }
-  } catch (caught) {
-    console.warn('Unable to read GLearning review state.', caught)
-    return null
-  }
-}
-
-function writeStoredReviewItems(items: Record<string, ReviewItemState>) {
-  if (typeof window === 'undefined') return
-
-  try {
-    const payload: StoredReviewItems = {
-      version: REVIEW_STORAGE_VERSION,
-      updatedAt: new Date().toISOString(),
-      items,
-    }
-    window.localStorage.setItem(REVIEW_STORAGE_KEY, JSON.stringify(payload))
-  } catch (caught) {
-    console.warn('Unable to persist GLearning review state.', caught)
-  }
-}
-
-function sanitizeReviewItems(value: Record<string, ReviewItemState>) {
-  const items: Record<string, ReviewItemState> = {}
-
-  Object.entries(value).forEach(([id, state]) => {
-    if (!state || typeof state !== 'object' || typeof state.dueAt !== 'string') return
-    items[id] = {
-      dueAt: state.dueAt,
-      intervalMinutes: typeof state.intervalMinutes === 'number' && state.intervalMinutes > 0 ? state.intervalMinutes : REVIEW_AGAIN_MINUTES,
-      ...(typeof state.reviewedAt === 'string' ? { reviewedAt: state.reviewedAt } : {}),
-      ...(state.lastGrade === 'again' || state.lastGrade === 'know' ? { lastGrade: state.lastGrade } : {}),
-    }
-  })
-
-  return items
-}
-
-function getDueReviewItems(savedItems: SavedItem[], reviewItems: Record<string, ReviewItemState>, nowMs: number) {
-  return savedItems
-    .filter((item) => isReviewDue(item.id, reviewItems, nowMs))
-    .sort((left, right) => getReviewDueMs(left.id, reviewItems) - getReviewDueMs(right.id, reviewItems) || right.updatedAt.localeCompare(left.updatedAt))
-}
-
-function countDueReviewItems(savedItems: SavedItem[], reviewItems: Record<string, ReviewItemState>, nowMs: number) {
-  return savedItems.filter((item) => isReviewDue(item.id, reviewItems, nowMs)).length
-}
-
-function isReviewDue(itemId: string, reviewItems: Record<string, ReviewItemState>, nowMs: number) {
-  return getReviewDueMs(itemId, reviewItems) <= nowMs
-}
-
-function getReviewDueMs(itemId: string, reviewItems: Record<string, ReviewItemState>) {
-  const dueAt = reviewItems[itemId]?.dueAt
-  if (!dueAt) return 0
-  const dueMs = Date.parse(dueAt)
-  return Number.isFinite(dueMs) ? dueMs : 0
-}
-
 function getSavedSourceMetadata(quest: QuestResponse | null) {
   if (!quest) return {}
   return {
@@ -2075,10 +2177,6 @@ function getSavedSourceMetadata(quest: QuestResponse | null) {
     ...(quest.source.enUrl ? { sourceEnUrl: quest.source.enUrl } : {}),
     ...(quest.source.zhUrl ? { sourceZhUrl: quest.source.zhUrl } : {}),
   }
-}
-
-function optionalSavedString(value: unknown) {
-  return typeof value === 'string' && value.trim() ? value : undefined
 }
 
 function isWebUrl(value: unknown): value is string {
@@ -2141,87 +2239,6 @@ function formatReviewDue(dueMs: number, nowMs: number) {
   return `Due in ${Math.round(hours / 24)}d`
 }
 
-function sanitizeSavedItems(value: Record<string, SavedItem>) {
-  const items: Record<string, SavedItem> = {}
-
-  Object.entries(value).forEach(([id, item]) => {
-    if (!item || typeof item !== 'object' || (item.type !== 'line' && item.type !== 'term')) return
-    if (typeof item.gameId !== 'string' || typeof item.questKey !== 'string') return
-
-    if (item.type === 'line') {
-      items[id] = {
-        type: 'line',
-        id: typeof item.id === 'string' ? item.id : id,
-        gameId: item.gameId,
-        questKey: item.questKey,
-        lineKey: typeof item.lineKey === 'string' ? item.lineKey : '',
-        lineId: typeof item.lineId === 'string' ? item.lineId : '',
-        speakerEn: typeof item.speakerEn === 'string' ? item.speakerEn : '',
-        speakerZh: typeof item.speakerZh === 'string' ? item.speakerZh : '',
-        en: typeof item.en === 'string' ? item.en : '',
-        zh: typeof item.zh === 'string' ? item.zh : '',
-        ...(optionalSavedString(item.questTitle) ? { questTitle: optionalSavedString(item.questTitle) } : {}),
-        ...(optionalSavedString(item.questZhTitle) ? { questZhTitle: optionalSavedString(item.questZhTitle) } : {}),
-        ...(optionalSavedString(item.sourceEnUrl) ? { sourceEnUrl: optionalSavedString(item.sourceEnUrl) } : {}),
-        ...(optionalSavedString(item.sourceZhUrl) ? { sourceZhUrl: optionalSavedString(item.sourceZhUrl) } : {}),
-        savedAt: typeof item.savedAt === 'string' ? item.savedAt : '',
-        updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : typeof item.savedAt === 'string' ? item.savedAt : '',
-      }
-      return
-    }
-
-    items[id] = {
-      type: 'term',
-      id: typeof item.id === 'string' ? item.id : id,
-      gameId: item.gameId,
-      questKey: item.questKey,
-      en: typeof item.en === 'string' ? item.en : '',
-      zh: typeof item.zh === 'string' ? item.zh : '',
-      ...(optionalSavedString(item.questTitle) ? { questTitle: optionalSavedString(item.questTitle) } : {}),
-      ...(optionalSavedString(item.questZhTitle) ? { questZhTitle: optionalSavedString(item.questZhTitle) } : {}),
-      ...(optionalSavedString(item.sourceEnUrl) ? { sourceEnUrl: optionalSavedString(item.sourceEnUrl) } : {}),
-      ...(optionalSavedString(item.sourceZhUrl) ? { sourceZhUrl: optionalSavedString(item.sourceZhUrl) } : {}),
-      savedAt: typeof item.savedAt === 'string' ? item.savedAt : '',
-      updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : typeof item.savedAt === 'string' ? item.savedAt : '',
-    }
-  })
-
-  return items
-}
-
-function getLineSaveId(gameId: string, questKey: string, lineKey: string | undefined) {
-  return `${gameId}:${questKey}:line:${lineKey || ''}`
-}
-
-function getTermSaveId(gameId: string, questKey: string, term: GlossaryTerm) {
-  return `${gameId}:${questKey}:term:${hashString([term.en, term.zh].join('|'))}`
-}
-
-function sanitizeStudyLines(value: Record<string, LineStudyState>) {
-  return Object.fromEntries(
-    Object.entries(value)
-      .filter(([, state]) => state && typeof state === 'object')
-      .map(([key, state]) => [
-        key,
-        {
-          ...(typeof state.revealedAt === 'string' ? { revealedAt: state.revealedAt } : {}),
-          ...(typeof state.firstPlayedAt === 'string' ? { firstPlayedAt: state.firstPlayedAt } : {}),
-          ...(typeof state.lastPlayedAt === 'string' ? { lastPlayedAt: state.lastPlayedAt } : {}),
-          ...(typeof state.playCount === 'number' ? { playCount: state.playCount } : {}),
-          ...(typeof state.masteredAt === 'string' ? { masteredAt: state.masteredAt } : {}),
-        },
-      ]),
-  )
-}
-
-function hashString(value: string) {
-  let hash = 5381
-  for (let index = 0; index < value.length; index += 1) {
-    hash = (hash * 33) ^ value.charCodeAt(index)
-  }
-  return (hash >>> 0).toString(36)
-}
-
 function createSampleQuest(game: Game): QuestResponse {
   const chapter = game.chapters[0]
   const lines: QuestLine[] = game.sample.map((line) => ({
@@ -2254,11 +2271,6 @@ function createSampleQuest(game: Game): QuestResponse {
   }
 }
 
-function getInitialDensity(): DensityId {
-  if (typeof window === 'undefined') return 'standard'
-  const savedDensity = window.localStorage.getItem(DENSITY_STORAGE_KEY)
-  return DENSITIES.some((density) => density.id === savedDensity) ? (savedDensity as DensityId) : 'standard'
-}
 
 function groupQuestsByChapter(quests: MainQuestOption[]) {
   const groups = new Map<string, MainQuestOption[]>()
@@ -2281,6 +2293,8 @@ function DialogueCard({
   onToggleSaved,
   isHelpOpen,
   onOpenLanguageHelp,
+  isVoiceOpen,
+  onOpenVoicePractice,
 }: {
   line: QuestLine
   hideChinese: boolean
@@ -2292,6 +2306,8 @@ function DialogueCard({
   onToggleSaved: () => void
   isHelpOpen: boolean
   onOpenLanguageHelp: () => void
+  isVoiceOpen: boolean
+  onOpenVoicePractice: () => void
 }) {
   const [revealed, setRevealed] = useState(Boolean(studyState.revealedAt) || !hideChinese)
 
@@ -2338,6 +2354,9 @@ function DialogueCard({
         )}
         <div className="actions">
           {line.audioUrl && <VoicePlayer line={line} onPlayed={onPlayed} />}
+          <button className={`act-btn shadow-btn ${isVoiceOpen ? 'is-on' : ''}`} type="button" aria-pressed={isVoiceOpen} onClick={onOpenVoicePractice}>
+            Shadow practice
+          </button>
           {line.zh && (
             <button className={`act-btn ${revealed ? 'is-on' : ''}`} type="button" onClick={() => (revealed ? setRevealed(false) : revealChinese())}>
               {revealed ? '◑ Hide CN' : '👁 Reveal CN'}
@@ -2434,6 +2453,38 @@ function audioSupportMessage(hasMp3: boolean) {
   return hasMp3
     ? 'MP3 audio failed to load. Try again, or open the source file.'
     : 'This line only has Fandom OGG/Vorbis audio. This browser may not support it.'
+}
+
+function buildShadowPracticeChunks(line: QuestLine): ShadowPracticeChunk[] {
+  const source = (line.en || line.zh || '').replace(/\s+/g, ' ').trim()
+  if (!source) return []
+
+  const clauseText = source.replace(/([,，;；:：.!?。！？])\s*/g, '$1|')
+  const clauses = clauseText
+    .split('|')
+    .map((part) => part.trim())
+    .filter(Boolean)
+
+  const chunkTexts = clauses
+    .flatMap((clause) => {
+      const words = clause.split(' ').filter(Boolean)
+      if (words.length <= 7) return [clause]
+
+      const grouped: string[] = []
+      for (let index = 0; index < words.length; index += 6) {
+        grouped.push(words.slice(index, index + 6).join(' '))
+      }
+      return grouped
+    })
+    .map((chunk) => chunk.replace(/^[\s.,，;；:：.!?。！？…-]+|[\s,，;；:：…-]+$/g, '').trim())
+    .filter((chunk) => /[A-Za-z0-9\u3400-\u9fff]/.test(chunk))
+
+  return chunkTexts.slice(0, 8).map((text, index) => ({
+    id: `${line.id}-shadow-${index + 1}`,
+    label: `Chunk ${index + 1}`,
+    text,
+    cue: index === 0 ? 'Start slow; copy the rhythm.' : index % 2 ? 'Pause, breathe, repeat.' : 'Join it to the previous chunk.',
+  }))
 }
 
 function formatTime(value: number) {
