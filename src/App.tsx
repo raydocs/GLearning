@@ -239,16 +239,7 @@ function App() {
           </div>
         </div>
 
-        <div className="progress-strip" title={readerData ? `${readerData.meta.enTitle} · ${readerData.meta.zhTitle}` : 'Loading quest'}>
-          <span className="strip-title">{readerData?.meta.enTitle || 'Loading quest archive'}</span>
-          <span className="strip-cn">{readerData?.meta.zhTitle || '正在同步源站'}</span>
-          <span className="strip-track" aria-hidden="true">
-            <i style={{ width: `${Math.round(stats.progress * 100)}%` }} />
-          </span>
-          <span className="strip-counter">
-            <b>{readerData?.meta.pairedCount || 0}</b> / {readerData?.meta.enCount || 0} paired
-          </span>
-        </div>
+        <GameTabs activeGame={activeGame} onPick={navigateToGame} />
 
         <div className="top-actions">
           <button className="icon-btn" type="button" data-hint="Game library" onClick={() => navigateToGame(null)}>
@@ -523,52 +514,84 @@ function App() {
 }
 
 function HomePage({ games, onOpenGame }: { games: readonly Game[]; onOpenGame: (gameId: GameId) => void }) {
-  const liveGame = getGame(LIVE_GAME_ID)
+  const [selectedGameId, setSelectedGameId] = useState<GameId>('starrail')
+  const selectedGame = getGame(selectedGameId)
+  const selectedPalette = selectedGame.palettes[0]
+
+  useEffect(() => {
+    const root = document.documentElement
+    root.dataset.game = selectedGame.id
+    document.body.dataset.game = selectedGame.id
+    root.style.setProperty('--bg', selectedPalette.bg)
+    root.style.setProperty('--surface', selectedPalette.surface)
+    root.style.setProperty('--surface-2', selectedPalette.surface)
+    root.style.setProperty('--ink', selectedPalette.ink)
+    root.style.setProperty('--muted', selectedPalette.muted)
+    root.style.setProperty('--faint', selectedPalette.muted)
+    root.style.setProperty('--accent', selectedPalette.accent)
+    root.style.setProperty('--accent-2', selectedPalette.accent2)
+    root.style.setProperty('--serif', selectedGame.serif)
+    root.style.setProperty('--sans', selectedGame.sans)
+  }, [selectedGame, selectedPalette])
 
   return (
     <>
       <header className="topbar home-topbar">
         <div className="brand">
-          <div className="brand-mark">G</div>
+          <div className="brand-mark">{selectedGame.glyph}</div>
           <div className="brand-text">
-            <div className="brand-name">GLearning</div>
-            <div className="brand-sub">game dialogue · bilingual study</div>
+            <div className="brand-name">GLearning · {selectedGame.cn}</div>
+            <div className="brand-sub">{selectedGame.studio} · 学英语</div>
           </div>
         </div>
-        <div className="progress-strip home-strip">
-          <span className="strip-title">Choose a world, keep the English in context</span>
-          <span className="strip-cn">每个游戏一套阅读器主题</span>
-        </div>
+        <GameTabs activeGame={selectedGame} onPick={setSelectedGameId} />
         <div className="top-actions">
-          <button className="icon-btn is-on" type="button" data-hint="Live Wuthering Waves" onClick={() => onOpenGame(liveGame.id)}>
-            W
+          <button className="icon-btn" type="button" data-hint="Daily timer">
+            ◴
+          </button>
+          <button className="icon-btn is-on" type="button" data-hint="Saved words">
+            ★
+          </button>
+          <button className="icon-btn" type="button" data-hint="Settings">
+            ⚙
           </button>
         </div>
       </header>
 
-      <main className="home-page">
+      <main className={`home-page landing-${selectedGame.motif}`}>
+        <LandingBackdrop game={selectedGame} />
         <section className="home-hero">
           <div className="home-copy">
-            <div className="home-kicker">GLearning library</div>
-            <h1>Learn English through the games you already care about.</h1>
-            <p>
-              A themed bilingual reader for each world: live quest dialogue for Wuthering Waves today, and prototype study rooms ready for the next game connectors.
-            </p>
+            <div className="home-kicker">● Game dialogue · no AI translation · 100% lore-authentic</div>
+            <h1>Learn English <span>from {selectedGame.name}.</span></h1>
+            <div className="home-hero-cn">{selectedGame.cnTagline}</div>
+            <p>把你最熟的剧情，变成最高效的双语阅读课。原版语音 + 官方中文文本，逐句对齐，逐词查词。先听角色说，再学他们怎么说。</p>
             <div className="home-actions">
-              <button className="primary-btn home-primary" type="button" onClick={() => onOpenGame(liveGame.id)}>
-                Open live Wuthering Waves reader
+              <button className="primary-btn home-primary" type="button" onClick={() => onOpenGame(selectedGame.id)}>
+                进入阅读器 → {selectedGame.chapters[0].cn}
               </button>
-              <span>{games.length} game pages · per-game palettes · exportable lines</span>
+              <button className="mini-btn home-ghost" type="button" onClick={() => document.querySelector('.game-grid')?.scrollIntoView({ behavior: 'smooth' })}>
+                浏览所有章节
+              </button>
+            </div>
+            <div className="landing-stats" aria-label="Study stats">
+              <div><b>{selectedGame.sample.length * 19}</b><span>aligned lines</span></div>
+              <div><b>{selectedGame.sample.length * 12}</b><span>voice clips</span></div>
+              <div><b>{selectedGame.glossary.length}</b><span>core terms</span></div>
             </div>
           </div>
-          <button className="home-poster" type="button" onClick={() => onOpenGame(liveGame.id)}>
-            <span className="poster-badge">live API</span>
-            <span className="poster-glyph">{liveGame.glyph}</span>
+          <button className="home-poster" type="button" onClick={() => onOpenGame(selectedGame.id)}>
+            <span className="poster-badge">{selectedGame.id === LIVE_GAME_ID ? 'live API' : selectedGame.palettes[0].name}</span>
+            <span className="poster-glyph">{selectedGame.glyph}</span>
             <span className="poster-frame" />
+            <span className="poster-ornaments" aria-hidden="true">
+              <i>✦</i><i>♪</i><i>✧</i><i>♫</i><i>★</i>
+            </span>
+            <span className="poster-object" aria-hidden="true" />
             <span className="poster-meta">
-              <small>{liveGame.studio}</small>
-              <b>{liveGame.name}</b>
-              <em>{liveGame.cnTagline}</em>
+              <small>Now reading · 当前章节 · {selectedGame.studio}</small>
+              <b>{selectedGame.chapters[0].name}</b>
+              <em>{selectedGame.chapters[0].cn}</em>
             </span>
           </button>
         </section>
@@ -616,6 +639,36 @@ function HomePage({ games, onOpenGame }: { games: readonly Game[]; onOpenGame: (
   )
 }
 
+function GameTabs({ activeGame, onPick }: { activeGame: Game; onPick: (gameId: GameId) => void }) {
+  return (
+    <nav className="game-tabs" aria-label="Game pages">
+      {GAMES.map((game) => (
+        <button key={game.id} className={`game-tab ${game.id === activeGame.id ? 'is-active' : ''}`} type="button" onClick={() => onPick(game.id)}>
+          <span>{game.glyph}</span>
+          <b>{game.cn}</b>
+        </button>
+      ))}
+    </nav>
+  )
+}
+
+function LandingBackdrop({ game }: { game: Game }) {
+  return (
+    <div className={`landing-backdrop motif-${game.motif}`} aria-hidden="true">
+      <span className="landing-label a">{game.motif === 'zzz' ? '[ NEW ERIDU // SECTOR-7 ]' : 'ASTRAL EXPRESS // CAR-03 //. PATH OF TRAILBLAZE'}</span>
+      <span className="landing-label b">{game.motif === 'zzz' ? 'CAUTION · 注意 · CAUTION' : '△ STELLARON · DETECTED'}</span>
+      <span className="landing-line l1" />
+      <span className="landing-line l2" />
+      <span className="landing-star s1">✦</span>
+      <span className="landing-star s2">✧</span>
+      <span className="landing-star s3">★</span>
+      <span className="landing-note n1">♪</span>
+      <span className="landing-note n2">♫</span>
+      <span className="landing-horizon" />
+    </div>
+  )
+}
+
 function ReaderBackdrop({ game }: { game: Game }) {
   return (
     <div className={`reader-backdrop motif-${game.motif}`} aria-hidden="true">
@@ -623,6 +676,11 @@ function ReaderBackdrop({ game }: { game: Game }) {
       <div className="backdrop-orb orb-b" />
       <div className="backdrop-grid" />
       <div className="backdrop-glyph">{game.glyph}</div>
+      <span className="reader-float f1">✦</span>
+      <span className="reader-float f2">♪</span>
+      <span className="reader-float f3">♫</span>
+      <span className="reader-float f4">✧</span>
+      <span className="reader-status-copy">{game.motif === 'zzz' ? 'CAUTION · 注意 · HOLLOW ZONE' : 'NOW READING · 当前章节 · GAME DIALOGUE'}</span>
     </div>
   )
 }
